@@ -204,7 +204,7 @@ The contract is: **the boundary between frontend, CMS, and data layer does not m
 
 ## 8. The Evolution Protocol (READ THIS LAST — IT'S THE MOST IMPORTANT SECTION)
 
-This project is **explicitly** built to be evolved by an iterative loop of subagents and review sessions, **at least 10 times**, until **two consecutive cycles** find nothing actionable.
+This project is **explicitly** built to be evolved by an iterative loop of subagents and review sessions, **at least 50 times**, until **two consecutive cycles** find nothing actionable.
 
 ### 8.1 The Loop
 
@@ -235,7 +235,7 @@ When dispatching a subagent for an evolution cycle, hand it:
 
 ### 8.5 What Success Looks Like
 
-After 10+ cycles, the codebase should have:
+After 50+ cycles, the codebase should have:
 - **Zero `any`** in new code.
 - **Zero silent errors** (every `catch` is typed).
 - **Zero duplication** of business logic between API/CMS/frontend.
