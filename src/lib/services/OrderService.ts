@@ -1,0 +1,346 @@
+import mongoose from 'mongoose';
+import { connectDB } from '@/lib/db';
+import { Product, Order, Voucher, Cart, type IOrder, type IOrderItem, type IProduct, type SkuVariant } from '@/models';
+import { orderNo, voucherCode } from '@/lib/utils/ids';
+import { AppError } from '@/lib/middleware/withError';
+import { getStrategy } from '@/lib/strategies';
+
+/**
+ * 订单服务。
+ *
+ * 重构后流程：
+ *  1) 创建订单：走 Strategy.quote + Strategy.checkStock 计算金额和校验库存。
+ *  2) 支付：在 mongoose session 事务中扣减库存 + 签发 voucher + 清空购物车 + 更新订单。
+ *  3) 取消：仅 pending 订单可取消；如已发生过库存扣减（实际不会，库存只在支付时扣）需归还。
+ */
+
+export interface CreateOrderItemInput {
+  productId: string;
+  variantId?: string;
+  visitDate?: string;
+  quantity: number;
+}
+
+export interface CreateOrderInput {
+  userId: string;
+  items: CreateOrderItemInput[];
+  contact: { name: string; phone: string; email?: string };
+  remark?: string;
+  /** 默认 15 分钟过期 */
+  expiresInMs?: number;
+}
+
+interface LeanProduct extends Omit<IProduct, 'skuVariants' | 'dailyInventory' | 'attributes'> {
+  _id: mongoose.Types.ObjectId;
+  skuVariants: SkuVariant[];
+  dailyInventory: { date: string; stock: number; sold: number }[];
+  attributes: Record<string, unknown>;
+}
+
+async function loadProducts(ids: string[]): Promise<Map<string, LeanProduct>> {
+  const docs = await Product.find({ _id: { $in: ids } }).lean<LeanProduct[]>();
+  return new Map(docs.map((d: LeanProduct) => [String(d._id), d]));
+}
+
+export async function quoteOrder(items: CreateOrderItemInput[]) {
+  if (items.length === 0) {
+    throw new AppError('EMPTY_ORDER', 'Order must contain at least one item', 422);
+  }
+  await connectDB();
+  const productIds = Array.from(new Set(items.map((i) => i.productId)));
+  const products = await loadProducts(productIds);
+
+  const orderItems: IOrderItem[] = [];
+  let total = 0;
+  for (const it of items) {
+    const product = products.get(it.productId);
+    if (!product) {
+      throw new AppError('PRODUCT_NOT_FOUND', `Product ${it.productId} not found`, 404);
+    }
+    if (product.status !== 'active') {
+      throw new AppError('PRODUCT_OFFLINE', `"${product.title}" is not on sale`, 422);
+    }
+
+    const strategy = getStrategy(product.ticketType);
+    const variant = it.variantId
+      ? product.skuVariants.find((v: SkuVariant) => String(v._id) === String(it.variantId))
+      : undefined;
+    if (it.variantId && !variant) {
+      throw new AppError(
+        'VARIANT_NOT_FOUND',
+        `Variant ${it.variantId} not found for ${product.title}`,
+        422
+      );
+    }
+
+    strategy.validateVisitDate?.({ product: product as unknown as IProduct, variant, visitDate: it.visitDate, quantity: it.quantity });
+    const stock = strategy.checkStock({ product: product as unknown as IProduct, variant, visitDate: it.visitDate, quantity: it.quantity });
+    if (!stock.ok && stock.error) throw stock.error;
+
+    const q = strategy.quote({ product: product as unknown as IProduct, variant, visitDate: it.visitDate, quantity: it.quantity });
+    const subtotal = q.unitPriceInCents * it.quantity;
+    total += subtotal;
+
+    orderItems.push({
+      productId: new mongoose.Types.ObjectId(it.productId),
+      productSnapshot: {
+        title: product.title,
+        cover: product.images?.[0] ?? '',
+        ticketType: product.ticketType,
+        location: product.location,
+      },
+      variantId: variant?._id ?? null,
+      variantName: q.variantName,
+      visitDate: it.visitDate,
+      quantity: it.quantity,
+      unitPriceInCents: q.unitPriceInCents,
+      subtotalInCents: subtotal,
+    });
+  }
+
+  return { orderItems, total };
+}
+
+export async function createOrder(input: CreateOrderInput) {
+  const { orderItems, total } = await quoteOrder(input.items);
+  const expiresAt = new Date(Date.now() + (input.expiresInMs ?? 15 * 60 * 1000));
+  const order = await Order.create({
+    orderNo: orderNo(),
+    userId: new mongoose.Types.ObjectId(input.userId),
+    items: orderItems,
+    totalAmountInCents: total,
+    status: 'pending',
+    contact: input.contact,
+    remark: input.remark,
+    expiresAt,
+  });
+  return order.toObject();
+}
+
+/**
+ * 支付（mock）。
+ *
+ * 关键点：
+ *  - **CAS 锁**：`pending → paying` 在事务最外层原子抢锁，确保同一订单的并发支付只有一个能进事务。
+ *  - **幂等性**：抢锁失败时按当前状态分流——`paid` 直接返回订单（200 幂等），`paying` 抛 409（并发进行中），
+ *    `cancelled/expired` 抛对应错误。
+ *  - **事务内**：所有库存扣减 + 订单置 paid + voucher 签发 放在 mongoose session 事务中；
+ *    任一步失败则整体回滚，保证不超卖、不漏发 voucher。
+ *  - 真实支付应改为 webhook 入口 + 签名校验 + 外部幂等键（如 stripe-signature / payment_intent_id）。
+ */
+export async function payOrder(orderId: string, userId: string) {
+  await connectDB();
+  if (!mongoose.isValidObjectId(orderId)) {
+    throw new AppError('INVALID_ID', 'Invalid order id', 400);
+  }
+  // 1) 预检查所有权（避免在已 cancelled 订单上做 CAS）
+  const owner = await Order.findById(orderId).select('userId status').lean();
+  if (!owner) throw new AppError('NOT_FOUND', 'Order not found', 404);
+  if (String(owner.userId) !== String(userId)) {
+    throw new AppError('FORBIDDEN', 'Not your order', 403);
+  }
+  if (owner.status === 'paid') {
+    // 已支付 → 幂等返回当前订单。响应 200，前端可安全重试。
+    return (await Order.findById(orderId).lean()) as IOrder;
+  }
+  if (owner.status === 'cancelled') {
+    throw new AppError('ORDER_CANCELLED', 'Order has been cancelled', 422);
+  }
+  // status === 'pending' || 'paying'（paying 来自上一次未完成的 CAS）
+
+  // 2) CAS 抢锁：pending → paying。一次只允许一个请求进入事务。
+  //    注意：这里不用事务——CAS 失败就退出，避免在事务内白白消耗连接。
+  const claimed = await Order.findOneAndUpdate(
+    { _id: orderId, status: 'pending' },
+    { $set: { status: 'paying' } },
+    { new: true }
+  );
+  if (!claimed) {
+    // 抢锁失败：要么是并发请求已经置为 paying（另一笔在跑），要么状态异常。
+    const current = await Order.findById(orderId).lean();
+    if (current?.status === 'paid') return current as IOrder;
+    if (current?.status === 'paying') {
+      throw new AppError(
+        'PAYMENT_IN_PROGRESS',
+        'Another payment is in progress for this order',
+        409
+      );
+    }
+    throw new AppError(
+      'INVALID_STATUS',
+      `Cannot pay order in status ${current?.status ?? 'unknown'}`,
+      422
+    );
+  }
+
+  // 3) 进入事务完成实际支付流程
+  const session = await mongoose.startSession();
+  try {
+    let resultOrder: IOrder | null = null;
+    await session.withTransaction(async () => {
+      const order = await Order.findById(orderId).session(session);
+      if (!order) throw new AppError('NOT_FOUND', 'Order not found', 404);
+      if (String(order.userId) !== String(userId)) {
+        throw new AppError('FORBIDDEN', 'Not your order', 403);
+      }
+      // 防御：CAS 通过后此处只可能是 paying；如果不是说明状态机被破坏
+      if (order.status !== 'paying') {
+        throw new AppError(
+          'INVALID_STATUS',
+          `Order state inconsistent: expected 'paying', got '${order.status}'`,
+          422
+        );
+      }
+      if (order.expiresAt && order.expiresAt.getTime() < Date.now()) {
+        order.status = 'cancelled';
+        order.cancelledAt = new Date();
+        await order.save({ session });
+        throw new AppError('ORDER_EXPIRED', 'Order has expired', 422);
+      }
+
+      // 1) 扣减库存（不同 product 互相独立，可并行；同 product 由 mongoose 事务序列化）
+      await Promise.all(
+        order.items.map(async (it) => {
+          if (it.variantId) {
+            const r = await Product.updateOne(
+              {
+                _id: it.productId,
+                skuVariants: {
+                  $elemMatch: {
+                    _id: it.variantId,
+                    $expr: { $gte: [{ $subtract: ['$$this.stock', '$$this.sold'] }, it.quantity] },
+                  },
+                },
+              },
+              { $inc: { 'skuVariants.$.sold': it.quantity } },
+              { session }
+            );
+            if (r.matchedCount === 0 || r.modifiedCount === 0) {
+              throw new AppError('OUT_OF_STOCK', 'Stock changed, please retry', 422);
+            }
+          } else if (it.visitDate) {
+            const r = await Product.updateOne(
+              {
+                _id: it.productId,
+                dailyInventory: {
+                  $elemMatch: {
+                    date: it.visitDate,
+                    $expr: { $gte: [{ $subtract: ['$$this.stock', '$$this.sold'] }, it.quantity] },
+                  },
+                },
+              },
+              { $inc: { 'dailyInventory.$.sold': it.quantity, salesCount: it.quantity } },
+              { session }
+            );
+            if (r.matchedCount === 0 || r.modifiedCount === 0) {
+              throw new AppError('OUT_OF_STOCK', 'Stock changed, please retry', 422);
+            }
+          } else {
+            const r = await Product.updateOne(
+              {
+                _id: it.productId,
+                $expr: { $gte: [{ $subtract: ['$stock', '$sold'] }, it.quantity] },
+              },
+              { $inc: { stock: -it.quantity, sold: it.quantity, salesCount: it.quantity } },
+              { session }
+            );
+            if (r.matchedCount === 0 || r.modifiedCount === 0) {
+              throw new AppError('OUT_OF_STOCK', 'Stock changed, please retry', 422);
+            }
+          }
+        })
+      );
+
+      // 2) 订单置为 paid
+      order.status = 'paid';
+      order.paidAt = new Date();
+      order.payment = {
+        provider: 'mock',
+        txnId: `mock_${order.orderNo}_${Date.now()}`,
+        paidAt: order.paidAt,
+      };
+      await order.save({ session });
+
+      // 3) 签发 voucher
+      const productIds = Array.from(new Set(order.items.map((i: IOrderItem) => i.productId)));
+      const productMap = await loadProducts(productIds.map((id) => String(id)));
+      const voucherDocs = [];
+      for (const it of order.items) {
+        const product = productMap.get(String(it.productId));
+        // 商品在创建订单与支付之间被删除/下架：拒绝签发，由事务回滚保证一致性。
+        if (!product) {
+          throw new AppError(
+            'PRODUCT_NOT_FOUND',
+            `Product ${String(it.productId)} was removed before payment completed`,
+            422
+          );
+        }
+        const strategy = getStrategy(product.ticketType);
+        const meta = strategy.voucherMeta?.(
+          {
+            product: product as unknown as IProduct,
+            variant: it.variantId
+              ? product.skuVariants.find((v) => String(v._id) === String(it.variantId))
+              : undefined,
+            visitDate: it.visitDate,
+            quantity: it.quantity,
+          },
+          order.paidAt
+        );
+        for (let i = 0; i < it.quantity; i++) {
+          voucherDocs.push({
+            code: voucherCode(),
+            orderId: order._id,
+            orderNo: order.orderNo,
+            productId: it.productId,
+            productTitle: it.productSnapshot.title,
+            userId: order.userId,
+            variantName: it.variantName,
+            visitDate: it.visitDate,
+            status: 'active',
+            expiresAt: meta?.expiresAt,
+          });
+        }
+      }
+      if (voucherDocs.length) await Voucher.insertMany(voucherDocs, { session });
+
+      // 4) 清空购物车中相关商品
+      await Cart.updateOne(
+        { userId: order.userId },
+        { $pull: { items: { productId: { $in: order.items.map((i: IOrderItem) => i.productId) } } } },
+        { session }
+      );
+
+      resultOrder = order.toObject();
+    });
+
+    return resultOrder!;
+  } catch (err) {
+    // 事务失败（库存不足、商品被删、voucher 签发失败 等）→ 把订单从 'paying' 退回 'pending'，
+    // 让用户能基于同一订单重试。失败状态本身由 withError 转 4xx/5xx 给前端。
+    // 注意：只有还在 'paying' 才回退（避免覆盖后续并发请求已写入的 'paid'）。
+    await Order.updateOne(
+      { _id: orderId, status: 'paying' },
+      { $set: { status: 'pending' } }
+    ).catch(() => undefined);
+    throw err;
+  } finally {
+    await session.endSession();
+  }
+}
+
+export async function cancelOrder(orderId: string, userId: string) {
+  await connectDB();
+  const order = await Order.findById(orderId);
+  if (!order) throw new AppError('NOT_FOUND', 'Order not found', 404);
+  if (String(order.userId) !== String(userId)) {
+    throw new AppError('FORBIDDEN', 'Not your order', 403);
+  }
+  if (order.status !== 'pending') {
+    throw new AppError('INVALID_STATUS', `Cannot cancel order in status ${order.status}`, 422);
+  }
+  order.status = 'cancelled';
+  order.cancelledAt = new Date();
+  await order.save();
+  return order.toObject();
+}

@@ -1,0 +1,146 @@
+import mongoose, { Schema, model, models, type HydratedDocument, type Model } from 'mongoose';
+
+/**
+ * 订单与凭证（票券码）。
+ *
+ * 设计：
+ *  - 订单条目保存"商品快照"，避免商品下架/调价后历史订单信息丢失。
+ *  - 一张订单可拆出多张 Voucher（购买 3 张同款演出票 → 3 个独立验票码）。
+ *  - 状态机：pending → paying → paid → (cancelled | refunded | partial_refunded) → closed
+ *    - `paying` 是 CAS 中间态：CAS 抢锁成功置 paying，事务内完成扣库存+签 voucher 后置 paid；
+ *      抢锁失败时区分"另一笔在跑 (paying) "与"已成功 (paid)"。
+ *  - 支持"未支付过期"自动取消：TTL index on expiresAt 仅作用于 status='pending'。
+ */
+export type OrderStatus =
+  | 'pending'
+  | 'paying'
+  | 'paid'
+  | 'cancelled'
+  | 'refunded'
+  | 'partial_refunded'
+  | 'closed';
+
+export interface IOrderItem {
+  productId: mongoose.Types.ObjectId;
+  /** 快照：商品标题/封面，避免商品改名后订单丢信息 */
+  productSnapshot: {
+    title: string;
+    cover: string;
+    ticketType: string;
+    location?: { city?: string; address?: string };
+  };
+  variantId?: mongoose.Types.ObjectId | null;
+  variantName?: string;
+  visitDate?: string;
+  quantity: number;
+  unitPriceInCents: number;
+  subtotalInCents: number;
+}
+
+export interface IOrder {
+  _id: mongoose.Types.ObjectId;
+  orderNo: string; // 业务订单号，对用户友好
+  userId: mongoose.Types.ObjectId;
+  items: IOrderItem[];
+  totalAmountInCents: number;
+  status: OrderStatus;
+
+  contact: {
+    name: string;
+    phone: string;
+    email?: string;
+  };
+
+  payment?: {
+    provider: string; // 'mock' / 'alipay' / 'wechat'
+    txnId?: string;
+    paidAt?: Date;
+  };
+
+  expiresAt?: Date; // 未支付超时取消时间
+  paidAt?: Date;
+  cancelledAt?: Date;
+  refundedAt?: Date;
+  remark?: string;
+
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const orderItemSchema = new Schema<IOrderItem>(
+  {
+    productId: { type: Schema.Types.ObjectId, ref: 'Product', required: true },
+    productSnapshot: {
+      title: { type: String, required: true },
+      cover: { type: String, default: '' },
+      ticketType: { type: String, required: true },
+      location: {
+        city: String,
+        address: String,
+      },
+    },
+    variantId: { type: Schema.Types.ObjectId, default: null },
+    variantName: { type: String },
+    visitDate: { type: String },
+    quantity: { type: Number, required: true, min: 1 },
+    unitPriceInCents: { type: Number, required: true, min: 0 },
+    subtotalInCents: { type: Number, required: true, min: 0 },
+  },
+  { _id: true }
+);
+
+const orderSchema = new Schema<IOrder>(
+  {
+    orderNo: { type: String, required: true, unique: true, index: true },
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    items: { type: [orderItemSchema], default: [] },
+    totalAmountInCents: { type: Number, required: true, min: 0 },
+    status: {
+      type: String,
+      enum: ['pending', 'paying', 'paid', 'cancelled', 'refunded', 'partial_refunded', 'closed'],
+      default: 'pending',
+      index: true,
+    },
+    contact: {
+      name: { type: String, required: true, trim: true },
+      phone: { type: String, required: true, trim: true },
+      email: { type: String, trim: true, lowercase: true },
+    },
+    payment: {
+      provider: { type: String, default: 'mock' },
+      txnId: { type: String },
+      paidAt: { type: Date },
+    },
+    expiresAt: { type: Date },
+    paidAt: { type: Date },
+    cancelledAt: { type: Date },
+    refundedAt: { type: Date },
+    remark: { type: String, maxlength: 500 },
+  },
+  { timestamps: true, collection: 'orders' }
+);
+
+orderSchema.index({ userId: 1, createdAt: -1 });
+orderSchema.index({ status: 1, expiresAt: 1 }); // 找超时未支付订单
+// TTL：超时未支付的 pending 订单由 MongoDB 自动清理（不需要 cron）
+orderSchema.index(
+  { expiresAt: 1 },
+  {
+    expireAfterSeconds: 0,
+    partialFilterExpression: { status: 'pending' },
+  }
+);
+
+orderSchema.set('toJSON', {
+  versionKey: false,
+  transform: (_doc, ret) => {
+    const r = ret as unknown as Record<string, unknown>;
+    r.id = (r._id as { toString(): string } | undefined)?.toString();
+    delete r._id;
+    return r as unknown as typeof ret;
+  },
+});
+
+export type OrderDoc = HydratedDocument<IOrder>;
+export const Order: Model<IOrder> =
+  (models.Order as Model<IOrder>) || model<IOrder>('Order', orderSchema);
