@@ -15,6 +15,15 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:3000')
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /**
+ * 可被 CDN/浏览器公开缓存的 GET 路径白名单。
+ * 加任何新路径前先确认：响应不携带用户态数据（无 cookie 依赖、无 PII、按 URL 即可重现）。
+ */
+const PUBLIC_CACHEABLE_GET_PATHS: RegExp[] = [
+  /^\/api\/products(?:\/[^/]+)?$/,        // /api/products 与 /api/products/[id]
+  /^\/api\/categories(?:\/[^/]+)?$/,      // /api/categories 与 /api/categories/[id]
+];
+
+/**
  * 'null' origin 是 sandboxed iframe / file:// / data: URI 注入的常见入口；
  * 永远不允许在 mutating 请求中出现，无论 ALLOWED_ORIGINS 怎么配。
  * 启动时若 ALLOWED_ORIGINS 误含 'null'，打 warning 提示运维清理。
@@ -71,12 +80,23 @@ export function middleware(req: NextRequest) {
   }
 
   if (req.method === 'GET' && req.nextUrl.pathname.startsWith('/api/')) {
-    // 列表类 30s 缓存，详情 60s
-    const isDetail = /\/api\/products\/[^/]+$/.test(req.nextUrl.pathname);
-    res.headers.set(
-      'Cache-Control',
-      `public, max-age=${isDetail ? 60 : 30}, stale-while-revalidate=120`
+    // 仅白名单内的公开资源可以走 CDN/浏览器缓存；其余 /api/* 一律 private, no-store。
+    // 关键安全考虑：Vercel/CloudFlare 等 CDN 按 URL key 缓存——如果把 /api/cart、/api/orders
+    // /api/auth/me 也设为 public，user A 的请求可能被 serve 给 user B（cross-user data leak）。
+    const isPublicCacheable = PUBLIC_CACHEABLE_GET_PATHS.some((re) =>
+      re.test(req.nextUrl.pathname)
     );
+    if (isPublicCacheable) {
+      const isDetail = /\/api\/products\/[^/]+$/.test(req.nextUrl.pathname);
+      res.headers.set(
+        'Cache-Control',
+        `public, max-age=${isDetail ? 60 : 30}, stale-while-revalidate=120`
+      );
+    } else {
+      // 鉴权或用户态接口：禁止任何层缓存。
+      // no-store 阻止浏览器持久化；private 是冗余（no-store 已包含）但作为双保险。
+      res.headers.set('Cache-Control', 'private, no-store');
+    }
   }
   // 安全头
   res.headers.set('X-Content-Type-Options', 'nosniff');

@@ -33,6 +33,7 @@ const limiter = rateLimit({
 });
 
 const validated = withValidation({ body: Schema }, async ({ body, req }) => {
+  // rateLimit 必须先于 connectDB / DB 查询——attacker 用 invalid body 打爆 DB 连接池。
   limiter(req);
   await connectDB();
   const voucher = await Voucher.findOne({ code: body.code });

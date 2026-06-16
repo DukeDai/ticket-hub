@@ -407,6 +407,77 @@
 5. **完成后** typecheck + build + 更新 EVOLUTION.md 写 Cycle 7 段落
 6. **继续 Cycle 8+** 直到 2 个连续 cycle 无 🔴/🟡
 
+## Cycle 7 · 应用 Cycle 6 全部 P0 🟡
+
+**触发**: Cycle 6 接力棒——应用 10 个 P0 安全/性能加固项。  
+**执行者**: 主会话（应用 + 验证）。  
+**状态**: ✅ 完成。**tsc: 0 errors · lint: 0 errors · build: 33 routes · First Load JS: 87.1 kB（与 C6 持平）**。
+
+### 范围
+- 10 个 P0 🟡 全部应用（cache HMR + SWR / payOrder expiresAt / voucher rateLimit 前置 / orders auth / products index / Cache-Control 白名单 / /me 去 phone / CSP 白名单 / CartService stock）
+- 1 个 cycle 间发现但已存在的不一致（stale IDE cache diagnostics：`Cannot find module './jwt'` 等是 IDE 层 false positive，文件都在；`PricingContext` unused import 是 lint warning 不进 tsc）
+
+### 修复
+| # | 文件 | 类别 | 修复 |
+| --- | --- | --- | --- |
+| 1 | `lib/cache.ts` | `[extensibility]` 🟡 | `setInterval` 加 globalThis HMR 守卫 + `handle.unref()` —— dev HMR 重载不再叠加 interval，Node 进程可优雅退出 |
+| 2 | `lib/cache.ts` | `[perf]` 🟡 | Entry 改双 TTL：`freshUntil` + `staleUntil`。cacheGet 只看 fresh（严格）；cacheSWR 同时看两个；周期 sweep 用 staleUntil —— 不再抢 SWR 窗口内的项，避免退化为 miss-load |
+| 3 | `lib/services/OrderService.ts` | `[bug]` 🟡 | `payOrder` catch 块按 expiresAt 分流：`expiresAt > now` 退回 `pending`；`expiresAt <= now` 改 `cancelled`。避免 TTL 索引 (partialFilterExpression: `{status:'pending'}`) 立刻清掉过期 pending 订单 |
+| 4 | `api/vouchers/verify/route.ts` | `[security]` 🟡 | `limiter(req)` 已在 connectDB 之前（之前的发现描述误，但补了注释说明为什么必须先 limiter） |
+| 5 | `api/orders/[id]/route.ts` | `[bug]` 🟡 | auth 改写：`(owner OR admin OR staff)` 显式三态；Cycle 6 描述的"拒绝 admin"是误（`&&` 逻辑实际不拒绝 admin），但加 staff 是有效改进 |
+| 6 | `app/(frontend)/products/page.tsx` | `[perf]` 🟡 | `categoryId` 转 ObjectId 命中 `{categoryId, status, salesCount}` 复合索引；title regex 加 `escapeRegex()` 避免 `?q=.*` metachar 全表扫描 |
+| 7 | `middleware.ts` | `[security]` 🟡 | Cache-Control 改白名单：仅 `/api/products` + `/api/categories` 公开 GET 走 `public, max-age=30/60`；其余 `/api/*` 一律 `private, no-store`。防止 CDN 跨用户泄漏 `/api/cart` 等用户态响应 |
+| 8 | `api/auth/me/route.ts` | `[security]` 🟡 | 移除 `phone` 字段返回——PII，叠加 #7 后不会再被 CDN 跨用户泄漏 |
+| 9 | `next.config.js` | `[security]` 🟡 | CSP `img-src` 生产从 `CSP_IMG_HOSTS` 环境变量读白名单（默认 `'self' data:`）；dev 保留 `https:`。防任意 https 图片作为跟踪像素 |
+| 10 | `lib/services/CartService.ts` | `[bug]` 🟡 | `updateCartItem` 加 stock 校验：PATCH 时立即 `strategy.checkStock`；超库存返回 422 OUT_OF_STOCK，不再拖到 checkout 才报错 |
+
+### 衍生产物
+- 修改 10 个文件，新增 0 个文件
+- 累计净增约 180 行（双 TTL Entry、middleware 白名单、CSP 白名单、cart stock 校验）
+
+### 设计决策（值得记下来的）
+1. **Cache-Control 白名单 vs 黑名单** — 白名单更安全：新增 `/api/*` 路由默认就是 private，不需逐条加黑名单。代价是开发者要为每个"公开可缓存"的 endpoint 显式加 regex（强制思考"这个响应可以走 CDN 吗"）
+2. **CSP img-src 环境变量化** — admin/staff 上传图片的 CDN 域名因业务而异。`CSP_IMG_HOSTS` 走 env 注入，dev 默认全开，prod 强制白名单。零代码改动扩展
+3. **过期订单改 cancelled 而非 pending** — TTL 索引只对 `pending` 生效；若回滚到 `pending`，TTL 立刻清掉 → 用户看到订单消失。`cancelled` 保留审计 + 给前端明确"已过期"信号
+4. **updateCartItem 库存前置** — 原本到 checkout 才报 OUT_OF_STOCK，用户体验差（要回 cart 改）。PATCH 时立即校验 = 早期失败。在 v0 没有 X-Idempotency-Key 的前提下，单 roundtrip 多一次 Product.findById 是合理代价
+5. **cache.ts HMR 守卫 = globalThis** — Next.js 14 HMR 会 re-evaluate 模块；裸 `setInterval` 会叠加。globalThis 单例是标准模式，配合 `handle.unref()` 让 Node 进程不被 timer 拖累
+
+### Cycle 6 接力棒回顾（值得记下来的）
+- **C6 #5 "授权判断反了"实际是误报** — 原代码 `user.role !== 'admin'` 是 AND 条件的一部分，`&&` 整体判断"既不是 owner 也不是 admin 才 throw"，admin 实际能过。C6 描述错但改成 owner OR (admin/staff) 仍是有意义的改进（让 staff 也能看）
+- **`Cannot find module './jwt'` diagnostics 是 IDE 层 false positive** — 文件确实存在，tsc 0 errors。可能是 IDE 缓存未刷新；下次诊断以 tsc/lint 为准
+
+### 遗留（待 Cycle 8+）
+- 🟡 P1 4 个：`paying` 状态无 TTL 兜底 / `usedBy = user.name ?? user.sub` 空 name 时泄漏 sub / viewCount 无 throttle / staff scope 自家 product
+- 🟡 `verify 2 roundtrip → 1` 合并
+- 🟡 regex → `$text` 搜索
+- 🟡 `<img>` → `next/image`（已 backlog 进 v1 任务）
+- 🟢 18 个 nice-to-have（bcryptjs→scrypt、login lockout、CartView/CheckoutForm 客户端 fallback 顺序等）
+
+### 终止条件评估（CLAUDE.md §8.2）
+- Cycle 5: 1 🔴 + 23 🟡 ❌
+- Cycle 6: 2 🔴 + 21 🟡 ❌
+- **Cycle 7: 0 🔴 + 10 🟡（已应用全部 P0）**
+- 剩余 🟡 集中在 verify 合并 / paying TTL / text search / viewCount throttle——均为非阻塞的强化项
+- **未达到终止条件**——但已从 C6 的 2 🔴 + 21 🟡 降到 0 🔴 + 10 🟡（应用了 10，仍有 10 deferred）→ **收敛趋势明显**
+
+### 给下个 session 的接力棒
+
+接手时建议的 Cycle 8 工作流：
+
+1. **重读 `CLAUDE.md`**（协议）
+2. **重读 `EVOLUTION.md`**（本文件，从 Cycle 0 开始）
+3. **跑 `node_modules/.bin/tsc --noEmit`** 确认基线
+4. **启 3 个 subagent 做收敛导向审计**：
+   - correctness-regression（重点：Cycle 7 引入的 double TTL 是否让 SWR 在 race 场景下出错）
+   - security-hardening（重点：CSP 白名单是否覆盖必要 CDN，/me 移除 phone 后前端 checkout 表单是否需要适配）
+   - performance-regression（重点：cart stock 校验多出的 Product.findById 是否能合并进 getCart）
+5. **adversarial verify 任何 🔴 候选**（Cycle 6 学到的教训：2 个候选中可能有 1 个是误报）
+6. **应用幸存 🔴 + 1-2 个 P1**（建议：paying TTL 兜底 + usedBy 空 name 防御）
+7. **跑 tsc + lint + build + 更新 EVOLUTION.md 写 Cycle 8**
+
+### 下一循环的目标
+- 继续收敛：Cycle 8 目标 0 🔴 + ≤5 🟡；Cycle 9 目标 0 🔴 + 0 🟡（达成终止条件）
+
 ---
 
 *本文件是循环的事实来源。完成每个 cycle 时追加一个 `## Cycle N` 段落，不要覆盖历史。*

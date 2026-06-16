@@ -1,6 +1,15 @@
 import Link from 'next/link';
+import mongoose from 'mongoose';
 import { connectDB } from '@/lib/db';
 import { Product, Category } from '@/models';
+
+/**
+ * 把字符串搜索词转义为安全的 regex 源串——避免 `?q=.*`、`?q=.\+` 这类 metachar 把查询放大成全表扫描。
+ * 仅做"用户字面量匹配"，不做 wildcard 展开；想要 wildcard 走 text index 路线（v1 任务）。
+ */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 export default async function ProductsPage({
   searchParams,
@@ -11,8 +20,13 @@ export default async function ProductsPage({
   const page = Math.max(1, Number(searchParams.page ?? 1));
   const pageSize = 24;
   const filter: Record<string, unknown> = { status: 'active' };
-  if (searchParams.categoryId) filter.categoryId = searchParams.categoryId;
-  if (searchParams.q) filter.title = { $regex: searchParams.q, $options: 'i' };
+  // categoryId 必须转 ObjectId 才能命中 `{categoryId, status, salesCount}` 复合索引
+  if (searchParams.categoryId && mongoose.isValidObjectId(searchParams.categoryId)) {
+    filter.categoryId = new mongoose.Types.ObjectId(searchParams.categoryId);
+  }
+  if (searchParams.q) {
+    filter.title = { $regex: escapeRegex(searchParams.q), $options: 'i' };
+  }
 
   const sort: Record<string, 1 | -1> =
     searchParams.sort === 'priceAsc'

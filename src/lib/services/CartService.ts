@@ -2,6 +2,7 @@ import mongoose, { type Types } from 'mongoose';
 import { connectDB } from '@/lib/db';
 import { Cart, Product, type ICartItem, type IProduct } from '@/models';
 import { AppError } from '@/lib/middleware/withError';
+import { getStrategy } from '@/lib/strategies';
 
 /**
  * 购物车逻辑：
@@ -259,7 +260,37 @@ export async function updateCartItem(
     cart.items.splice(idx, 1);
   } else {
     const target = cart.items[idx];
-    if (target) target.quantity = Math.min(99, quantity);
+    if (!target) throw new AppError('ITEM_NOT_FOUND', 'Cart item not found', 404);
+    const clamped = Math.min(99, quantity);
+
+    // PATCH 时立即校验库存：用户改 quantity 时就把库存耗尽的情况挡在 checkout 之前。
+    // 若不挡，PATCH qty=99 → addCartItem 路径无校验 → checkout 才抛 OUT_OF_STOCK，
+    // 用户要回 cart 改，体验差。
+    const product = (await Product.findById(target.productId).lean()) as IProduct | null;
+    if (!product) {
+      throw new AppError('PRODUCT_NOT_FOUND', 'Product no longer exists', 404);
+    }
+    if (product.status !== 'active') {
+      throw new AppError('PRODUCT_OFFLINE', 'Product is not on sale', 422);
+    }
+    const variant = target.variantId
+      ? product.skuVariants.find(
+          (v) => v._id && String(v._id) === String(target.variantId)
+        )
+      : undefined;
+    if (target.variantId && !variant) {
+      throw new AppError('VARIANT_NOT_FOUND', 'Variant no longer exists', 422);
+    }
+    const strategy = getStrategy(product.ticketType);
+    const stock = strategy.checkStock({
+      product,
+      variant,
+      visitDate: target.visitDate ?? undefined,
+      quantity: clamped,
+    });
+    if (!stock.ok && stock.error) throw stock.error;
+
+    target.quantity = clamped;
   }
   await cart.save();
   return getCart(userId);
