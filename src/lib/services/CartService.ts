@@ -251,36 +251,51 @@ export async function updateCartItem(
   quantity: number
 ) {
   await connectDB();
-  const cart = await loadCart(userId);
-  const idx = cart.items.findIndex(
+  // C9 优化：旧实现 loadCart + Product.findById + cart.save + getCart 是 4-5 roundtrip
+  // （loadCart 1-2 次 + Product.findById + cart.save + getCart 内部 Product.find($in) +
+  // 过滤时的 Cart.updateOne）。新实现用原子 $pull/$set 替代 cart.save + getCart，
+  // 减到 3-4 roundtrip（Cart.findOne + Product.findById + Cart.findOneAndUpdate +
+  // buildCartViewModel 内部的 $in 查询，必要时 1 次 updateOne）。$ 定位符用 items._id 过滤，
+  // 不依赖数组下标（即使并发 PATCH/ADD 改动了 items 顺序，filter 仍唯一锁定目标元素）。
+  const userObjId = new mongoose.Types.ObjectId(userId);
+
+  // Step 1：定位 item 在 cart.items 中的下标
+  const current = await Cart.findOne({ userId: userObjId }).lean();
+  if (!current) throw new AppError('ITEM_NOT_FOUND', 'Cart item not found', 404);
+  const idx = current.items.findIndex(
     (i: ICartItem) => String(i._id) === itemId
   );
   if (idx === -1) throw new AppError('ITEM_NOT_FOUND', 'Cart item not found', 404);
-  if (quantity <= 0) {
-    cart.items.splice(idx, 1);
-  } else {
-    const target = cart.items[idx];
-    if (!target) throw new AppError('ITEM_NOT_FOUND', 'Cart item not found', 404);
-    const clamped = Math.min(99, quantity);
+  const target = current.items[idx];
+  if (!target) throw new AppError('ITEM_NOT_FOUND', 'Cart item not found', 404);
 
-    // PATCH 时立即校验库存：用户改 quantity 时就把库存耗尽的情况挡在 checkout 之前。
-    // 若不挡，PATCH qty=99 → addCartItem 路径无校验 → checkout 才抛 OUT_OF_STOCK，
-    // 用户要回 cart 改，体验差。
-    const product = (await Product.findById(target.productId).lean()) as IProduct | null;
-    if (!product) {
-      throw new AppError('PRODUCT_NOT_FOUND', 'Product no longer exists', 404);
-    }
-    if (product.status !== 'active') {
-      throw new AppError('PRODUCT_OFFLINE', 'Product is not on sale', 422);
-    }
-    const variant = target.variantId
-      ? product.skuVariants.find(
-          (v) => v._id && String(v._id) === String(target.variantId)
-        )
-      : undefined;
-    if (target.variantId && !variant) {
-      throw new AppError('VARIANT_NOT_FOUND', 'Variant no longer exists', 422);
-    }
+  // Step 2：库存前置校验（与 Cycle 7 行为一致：PATCH 时立即挡 OUT_OF_STOCK）
+  const product = (await Product.findById(target.productId).lean()) as IProduct | null;
+  if (!product) {
+    throw new AppError('PRODUCT_NOT_FOUND', 'Product no longer exists', 404);
+  }
+  if (product.status !== 'active') {
+    throw new AppError('PRODUCT_OFFLINE', 'Product is not on sale', 422);
+  }
+  const variant = target.variantId
+    ? product.skuVariants.find(
+        (v) => v._id && String(v._id) === String(target.variantId)
+      )
+    : undefined;
+  if (target.variantId && !variant) {
+    throw new AppError('VARIANT_NOT_FOUND', 'Variant no longer exists', 422);
+  }
+
+  // Step 3：原子 update（quantity=0 时 $pull 删除；否则 $set 该下标）
+  let updatedCart: { items: ICartItem[]; _id?: Types.ObjectId } | null;
+  if (quantity <= 0) {
+    updatedCart = (await Cart.findOneAndUpdate(
+      { userId: userObjId, 'items._id': new mongoose.Types.ObjectId(itemId) },
+      { $pull: { items: { _id: new mongoose.Types.ObjectId(itemId) } } },
+      { new: true, lean: true }
+    )) as unknown as { items: ICartItem[]; _id?: Types.ObjectId } | null;
+  } else {
+    const clamped = Math.min(99, quantity);
     const strategy = getStrategy(product.ticketType);
     const stock = strategy.checkStock({
       product,
@@ -290,10 +305,15 @@ export async function updateCartItem(
     });
     if (!stock.ok && stock.error) throw stock.error;
 
-    target.quantity = clamped;
+    updatedCart = (await Cart.findOneAndUpdate(
+      { userId: userObjId, 'items._id': new mongoose.Types.ObjectId(itemId) },
+      { $set: { 'items.$.quantity': clamped } },
+      { new: true, lean: true }
+    )) as unknown as { items: ICartItem[]; _id?: Types.ObjectId } | null;
   }
-  await cart.save();
-  return getCart(userId);
+  if (!updatedCart) throw new AppError('ITEM_NOT_FOUND', 'Cart item not found', 404);
+
+  return buildCartViewModel(updatedCart, product as unknown as ProductLean);
 }
 
 export async function removeCartItem(userId: string, itemId: string) {

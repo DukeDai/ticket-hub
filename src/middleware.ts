@@ -87,11 +87,23 @@ export function middleware(req: NextRequest) {
       re.test(req.nextUrl.pathname)
     );
     if (isPublicCacheable) {
-      const isDetail = /\/api\/products\/[^/]+$/.test(req.nextUrl.pathname);
-      res.headers.set(
-        'Cache-Control',
-        `public, max-age=${isDetail ? 60 : 30}, stale-while-revalidate=120`
-      );
+      // C9：拆公开/已鉴权两种变体。即使 product/detail 是同一个 URL，staff/admin 看到的
+      // 内容（draft / offline 可见）和匿名用户（仅 active）不同，必须按 cookie 维度分别缓存，
+      // 否则 CDN 命中后匿名用户会看到 staff 视角的草稿。
+      const hasSession = req.cookies.has('tk_session');
+      if (hasSession) {
+        // Vary: Cookie 让 CDN/浏览器把已登录请求与匿名请求分别缓存；Cache-Control 降级为
+        // private（已登录响应不能被其他用户复用）。这是 v1 CDN 部署前的最后兜底。
+        res.headers.set('Vary', 'Cookie');
+        res.headers.set('Cache-Control', 'private, no-store');
+      } else {
+        const isDetail = /\/api\/products\/[^/]+$/.test(req.nextUrl.pathname);
+        res.headers.set('Vary', 'Cookie');
+        res.headers.set(
+          'Cache-Control',
+          `public, max-age=${isDetail ? 60 : 30}, stale-while-revalidate=120`
+        );
+      }
     } else {
       // 鉴权或用户态接口：禁止任何层缓存。
       // no-store 阻止浏览器持久化；private 是冗余（no-store 已包含）但作为双保险。

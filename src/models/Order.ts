@@ -130,6 +130,16 @@ orderSchema.index(
     partialFilterExpression: { status: 'pending' },
   }
 );
+// C8 加固：'paying' 状态若事务/rollback 失败会卡死——用 TTL 兜底回收。
+// paying 是 CAS 抢锁后到事务完成前的中间态，正常 < 5s。设 5 分钟宽限避免误清。
+// 超时的 paying → 直接清掉（订单恢复为不存在；用户会看到"订单已失效"重试）。
+orderSchema.index(
+  { updatedAt: 1 },
+  {
+    expireAfterSeconds: 300, // 5 min
+    partialFilterExpression: { status: 'paying' },
+  }
+);
 
 orderSchema.set('toJSON', {
   versionKey: false,

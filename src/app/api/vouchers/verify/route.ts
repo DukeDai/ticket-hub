@@ -47,8 +47,18 @@ const validated = withValidation({ body: Schema }, async ({ body, req }) => {
     throw new AppError('EXPIRED', 'Voucher has expired', 422);
   }
   // 服务端绑定核销人：审计字段必须来自鉴权上下文，不能让 staff 伪造。
+  // C8 防御：user.name 为空字符串时（如未来 CMS 创建 staff 跳过 RegisterSchema），
+  // 兜底走 user.sub 会把 ObjectId 写入 usedBy——审计员能据此反查 User 集合。
+  // 显式检查 name 非空，无 name 则直接拒绝核销，让 staff 走修账号流程。
   const user = (req as NextRequest & { user?: { sub: string; name?: string } | null }).user;
-  const usedBy = user?.name ?? user?.sub ?? 'unknown';
+  if (!user?.name) {
+    throw new AppError(
+      'ACCOUNT_INVALID',
+      'Verifier account must have a non-empty display name; please update your profile',
+      422
+    );
+  }
+  const usedBy = user.name;
   // 原子核销：避免两个核销员同时成功扣同一张券
   const updated = await Voucher.findOneAndUpdate(
     { _id: voucher._id, status: 'active' },

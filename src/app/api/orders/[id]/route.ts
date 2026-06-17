@@ -1,11 +1,27 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { connectDB } from '@/lib/db';
 import { Order } from '@/models';
 import { withAuth } from '@/lib/middleware/withAuth';
+import { rateLimit } from '@/lib/middleware/rateLimit';
 import { AppError } from '@/lib/middleware/withError';
 import mongoose from 'mongoose';
 
+/**
+ * C9：rateLimit（60/min per user）。该端点带 userId+contact+items.productSnapshot 等 PII，
+ * 已登录账号用脚本枚举订单 ID（虽然 ObjectId 难枚举）仍能 dump 全量。
+ * 限流 60/min 给真实用户足够带宽（前端翻页 = 一次），挡住脚本化 dump。
+ */
+const orderGetLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 60,
+  key: (req: NextRequest) => {
+    const uid = req.cookies.get('tk_session')?.value ?? 'anon';
+    return `orders:get:${uid}:${new URL(req.url).pathname}`;
+  },
+});
+
 export const GET = withAuth(async (req, user) => {
+  orderGetLimiter(req);
   const id = new URL(req.url).pathname.split('/').pop()!;
   if (!mongoose.isValidObjectId(id)) {
     throw new AppError('INVALID_ID', 'Invalid order id', 400);
