@@ -347,10 +347,14 @@ describe('CreateOrderSchema', () => {
   });
 
   it('rejects past visitDate (Cycle 4 superRefine)', () => {
+    // Schema parses visitDate as UTC midnight and compares to UTC-today.
+    // Compute yesterday in UTC to match the schema's reference frame —
+    // otherwise TZ drift can produce a false pass when local-yesterday
+    // equals UTC-today.
     const past = (() => {
       const d = new Date();
-      d.setDate(d.getDate() - 1);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      d.setUTCDate(d.getUTCDate() - 1);
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
     })();
     const r = CreateOrderSchema.safeParse({
       ...validOrder,
