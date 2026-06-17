@@ -119,6 +119,9 @@ export async function listProducts(query: ListProductQuery) {
   });
   const [items, total] = await Promise.all([
     Product.find(filter)
+      .select(
+        'title slug images priceInCents originalPriceInCents location.city salesCount ticketType'
+      )
       .sort(sortObj)
       .skip(skip)
       .limit(limit)

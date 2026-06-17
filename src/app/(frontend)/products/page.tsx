@@ -36,7 +36,14 @@ export default async function ProductsPage({
       : { salesCount: -1 };
 
   const [items, total, categories] = await Promise.all([
-    Product.find(filter).sort(sort).skip((page - 1) * pageSize).limit(pageSize).lean(),
+    Product.find(filter)
+      .select(
+        'title slug images priceInCents originalPriceInCents location.city salesCount ticketType'
+      )
+      .sort(sort)
+      .skip((page - 1) * pageSize)
+      .limit(pageSize)
+      .lean(),
     Product.countDocuments(filter),
     Category.find({ isActive: true }).lean(),
   ]);

@@ -6,6 +6,7 @@ export default async function HomePage() {
   await connectDB();
   const [hot, categories] = await Promise.all([
     Product.find({ status: 'active' })
+      .select('title slug images priceInCents originalPriceInCents salesCount ticketType')
       .sort({ salesCount: -1 })
       .limit(8)
       .lean(),
