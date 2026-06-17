@@ -986,4 +986,84 @@ Cycle 12 决定 mongodb-memory-server 是否引入 — 引入则单测可覆盖 
 
 ---
 
-*演化协议维护期 + v1.0 路线图执行中。C11/C12 累计 134 tests，strategies 100%，validation 100%。下一轮目标：middleware HOF 测试（不需 DB 决策）→ utils 测试 → mongodb-memory-server 决策（开 service 测试大门）。*
+## Cycle 12 Phase B · 中间件 + utils 测试扩展 + TZ 回归修复
+
+**触发**: Cycle 12 Phase A 接力棒中"middleware HOF + utils 测试"（C11 时已写下，无 DB 依赖即可独立做）。  
+**执行者**: 主会话。ultracode Workflow 的 Phase 1 lens-pass 设计稿落地后由主会话直接 type-check 修复并 commit（apply agent 触发了 token plan 限额，改走更轻量的 in-context 执行）。  
+**状态**: ✅ 完成。**tsc: 0 errors · next lint: 0 errors (6 个 `<img>` warning 不变) · build: 33 routes · test: 331 passed (13 files) · coverage: 30.96% → 52.02% statements**。
+
+### 范围（本会话落地）
+
+3 个 atomic commit（git log 顺序）：
+
+| Commit | 范围 | 文件 | 净行数 |
+| --- | --- | --- | --- |
+| `test(middleware+utils)` | middleware + utils 首批测试 | 8 | +1865 |
+| `test(schemas)` | past-visitDate TZ frame fix | 1 | +6/-2 |
+| `docs(evolution)` | 本段 | 1 | — |
+
+### 中间件测试（102 tests / 100% stmt / 97.87% branch / 100% fn）
+
+| 文件 | tests | 关键覆盖 |
+| --- | --- | --- |
+| `src/lib/middleware/__tests__/withError.test.ts` | 28 | AppError 构造、errorResponse 四分支（AppError/ZodError/plain Error/non-Error）、5xx message redaction、headers 提取（null / string / undefined）、withError HOF（位置参数透传、sync throw、Promise.reject、AppError 5xx 不进 console.error） |
+| `src/lib/middleware/__tests__/withValidation.test.ts` | 24 | POST/PUT/PATCH body 解析、GET/DELETE 跳过、content-type 守卫（含 `; charset=utf-8` suffix）、malformed JSON → 400、query schema + coerce、body+query 顺序、独立 null 提取、`AuthedRequest` 类型 |
+| `src/lib/middleware/__tests__/withAuth.test.ts` | 23 | 401/403/200 三路径、JWT 验证失败模式（expired / 错误 secret / 缺 JWT_SECRET）、optional + null user、role 单值 / 多值 / 不匹配、overload 双形式、`req.user` 注入、handler throw 转换 |
+| `src/lib/middleware/__tests__/rateLimit.test.ts` | 27 | bucket 计数、window 重置、Retry-After（Math.ceil）、自定义 key、IP+path keying、TRUST_PROXY XFF / x-real-ip / req.ip / 'unknown' 兜底、cleanup interval + unref、end-to-end with withError |
+
+fixtures：`src/lib/middleware/__tests__/fixtures.ts`（makeReq / setCookie）。
+
+### utils 测试（95 tests / 100% all metrics）
+
+| 文件 | tests | 关键覆盖 |
+| --- | --- | --- |
+| `src/lib/utils/__tests__/format.test.ts` | 37 | formatCents 边界（0/1/10000/-5000/NaN/±Infinity/自定义符号）、parseYuanToCents（int/decimal/四舍五入/NaN/空串/空白）、formatDate 7 分支、formatDateTime、round-trip |
+| `src/lib/utils/__tests__/ids.test.ts` | 18 | shortId 默认/显式/min/alphabet（去 0O1IL）/uniqueness/256 字符不 OOM/缺 crypto 抛错；orderNo 时间戳解析/末 6 位 base32/单调性/cross-year/本地时区；voucherCode 10 位/10k 唯一 |
+| `src/lib/utils/__tests__/pagination.test.ts` | 40 | buildPagination（skip 算术 + bug surface；sort 白名单 + NoSQL 注入守卫；q $or + 合并 + ReDoS；generic T）；pageResult（totalPages math + 边界 + 0/Infinity）；integration round-trip |
+
+### 顺手修复：C4 superRefine TZ frame 错位
+
+`src/lib/validation/__tests__/schemas.test.ts` 的 `rejects past visitDate` 用 `setDate(getDate()-1)`（本地时区）算"昨天"，但 `CreateOrderSchema` 的 superRefine 用 `Date.UTC(...)` 解析为 UTC 0 点再与 UTC 今天比较。在 UTC+8（中国时区）且 UTC 时间还在前一天时（如本地 6/18 凌晨 1 点 = UTC 6/17 17 点），本地昨天 = '2026-06-17' 恰好等于 UTC 今天，schema 接受，断言 `r.success=false` 失败。
+
+修复：测试改用 `setUTCDate(getUTCDate() - 1)`，与 schema 同一参考系。**这是一个之前未暴露的 latent flake** —— test 之前通过纯属运气（今天边界碰巧重合）。
+
+### 踩坑（值得记下来）
+
+1. **`vi.resetModules()` 会让跨文件 class 身份漂移** — beforeEach 重置 rateLimit 模块后，rateLimit 抛出的 AppError 来自**新** withError 模块，但测试文件顶部 `import { AppError }` 拿到的是**旧** withError。`caught instanceof AppError` 失败。修法：在需要 instanceof 的测试内 `const { AppError } = await import('../withError')`，或干脆断言 shape（code/status）而非 class 身份。
+2. **`vi.fn<T>` 只接受一个泛型参数** — Vitest 2.x 的签名是 `vi.fn<T extends Procedure>(impl?)`，不是 `vi.fn<TArgs, TReturn>`。写法 `vi.fn<(ctx: AnyCtx) => Promise<Response>>(impl)` 才对。
+3. **`typeof import(...)` 看不到 type-only 导出** — `RateLimitOpts` 是 type-only export，`typeof import('../rateLimit').RateLimitOpts` 报 TS2551。修法：直接 `import('../rateLimit').RateLimitOpts`（去掉 typeof）。
+4. **`as const` 会让数组 path 变 readonly** — `new ZodError([{path: [...] as const}])` 因 `ZodIssue.path` 要求 mutable 报 TS2322。修法：用 `: ZodIssue` 注解让 TS 推断为 mutable `(string | number)[]`。
+5. **Vitest fake-timer + module 副作用** — rateLimit 在模块加载时启动 setInterval 做桶清理。测试需要 `vi.resetModules()` 后再 `import` 来重置 bucket Map；这同时会触发 `setInterval` 副作用，需要 `vi.useFakeTimers()` 让 fake-timer 控制时钟。
+
+### Phase B3 决策：mongodb-memory-server 推迟到 v1.1
+
+**推荐：defer 到 v1.1（Playwright E2E 阶段一起引入）。**
+
+理由：
+1. **当前 ROI 更高**：middleware + utils + schemas 加完覆盖率到 52% / 93% branch，**剩余可补的只有 services + auth**。services（CartService / OrderService / ProductService）必须用真 DB —— mongodb-memory-server 是现实路径。
+2. **代价不小**：mongodb-memory-server 启动慢（~1-2s per file）、macOS arm64 安装约 150MB、需要下载 binary、CI 跑全套 ~30s+。v1.0 阶段未在生产部署前阻塞这个代价是合理的。
+3. **v1.1 路径更顺**：Playwright E2E 已经在 v1.1 路线图里（ROADMAP §4）。那时一次性引入 mongodb-memory-server + 真 Mongo fixture + Playwright docker，三件套一起上。
+4. **Auth 测试可用 plain mocks 实现**：jose 的 `SignJWT`/`jwtVerify` 用真实 secret 直接跑（不需要 mock 库），bcryptjs cost 12 也是真跑（hash + compare）。session.ts 的 React.cache + next/headers 这部分用 `vi.mock('@/lib/auth/session')` 跳过即可。auth/__tests__/fixtures.ts scaffold 已经在 Phase B1 间接用（withAuth.test.ts 引用），等 Phase C 落 auth tests。
+
+**C12 Phase C 候选（下一轮）**：
+1. auth/ 单测（plain mocks，~30 tests，~150 行）：jwt.ts（88% 已覆盖 → 100%）、password.ts（32% → 100%）、session.ts（0% → ~60% via `vi.mock`）、guard.ts（0% → 100%）。无 DB 依赖
+2. service/ 单测（mongodb-memory-server，~50 tests，~400 行）：CartService boundary + OrderService pay/cancel + ProductService 库存扣减并发安全。高 ROI 但需先做 mongodb-memory-server 集成测试
+3. Playwright E2E（v1.1）：API 路径 E2E + 关键 CMS 流程
+
+### 验证
+
+- tsc 0 errors
+- next lint 0 errors (6 个 `<img>` warning 不变)
+- vitest 331 passed (13 files) in ~720ms
+- vitest coverage: 52.02% statements / 93.28% branches / 83.09% functions / 52.02% lines
+
+### 给后续 session 的接力棒
+
+- C12 Phase B 完成：**middleware 100% + utils 100% + validation 100% + strategies 93.7%**
+- 决策：**mongodb-memory-server 推迟到 v1.1**
+- 下一轮建议：**Phase C auth/ 测试**（无 DB 决策，~30 tests 可独立做）→ Phase D services（开 mongodb-memory-server 决策）→ Phase E Playwright E2E
+- 维护：周期性的 TZ-aware 测试漂移检查 —— 任何含 `new Date()` / `Date.UTC(...)` / `setDate(...)` 的测试都必须明确标注参考系（local / UTC / mocked），否则下次跨午夜 CI 仍会翻车
+
+---
+
+*演化协议维护期 + v1.0 路线图执行中。C11/C12 累计 331 tests，middleware/utils/validation 100%，strategies 93.7%。下一轮目标：auth 测试（plain mocks，~30 tests）→ services 测试（mongodb-memory-server 决策）。*
