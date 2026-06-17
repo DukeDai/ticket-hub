@@ -954,4 +954,36 @@ Cycle 12 决定 mongodb-memory-server 是否引入 — 引入则单测可覆盖 
 
 ---
 
-*演化协议维护期（Cycle 10 终止）。Cycle 11 为 v1.0 路线图（ROADMAP §3）的"测试基建 v1.0 部分"首个执行 cycle，专注补 0% → 26.91% 行覆盖。*
+## Cycle 12 Phase A · 关闭 strategy 覆盖率缺口
+
+**触发**: Cycle 11 接力棒中列出的"experience/other 补完 (60%+40% gap)"。  
+**执行者**: 主会话（手工 + ralph-loop 模式 iteration 1）。  
+**状态**: ✅ 完成。**tsc: 0 · vitest: 134 passed (6 files) · strategies/: 100% (5/5)**.
+
+### 范围
+- `src/lib/strategies/__tests__/experience.test.ts` (19 tests, 100% line/branch/function)
+- `src/lib/strategies/__tests__/other.test.ts` (12 tests, 100% line/branch/function)
+- `src/lib/strategies/__tests__/fixtures.ts` — `makeDailyInventory` 签名从 `DailyInventory` 改为 `Partial<DailyInventory> & { date: string }`，跟 `makeVariant` 风格统一
+
+### 修复
+- experience.test.ts: quote (变体/商品)、checkStock (simple/daily 4 路)、validateVisitDate (4 边界)、voucherMeta (badge 拼接 + validDaysAfterPurchase/validTo)
+- other.test.ts: quote、checkStock (验证 other 不走 dailyInventory)、voucherMeta (无 badge, 3 种 expiresAt)、**显式断言 `validateVisitDate === undefined`** 防止后续 PR 误添加污染兜底语义
+
+### 覆盖率
+- statements: 30.96% (489/1579) — 较 C11 升 4.05pp
+- branches: 89.07% (106/119) — 较 C11 升 5.74pp
+- strategies/: **100% 全 5 个**（sight/show/dining/experience/other）
+
+### Cycle 12 Phase B 候选（下一轮）
+1. middleware HOF 单测 (withError / withValidation / withAuth) — 无 DB 依赖，~3 文件 ~40 tests
+2. utils 单测 (pagination / format / ids) — 无 DB 依赖
+3. mongodb-memory-server 决策 + 启 CartService 测试
+4. auth 测试 (bcryptjs + jose mock)
+
+### 给后续 session 的接力棒
+- ralph-loop iteration 1 完成（experience + other）
+- 下一轮可走 Phase B 任一候选。建议优先 middleware HOF（高 ROI，无需 DB 决策）
+
+---
+
+*演化协议维护期 + v1.0 路线图执行中。C11/C12 累计 134 tests，strategies 100%，validation 100%。下一轮目标：middleware HOF 测试（不需 DB 决策）→ utils 测试 → mongodb-memory-server 决策（开 service 测试大门）。*

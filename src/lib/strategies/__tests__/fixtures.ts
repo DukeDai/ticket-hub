@@ -78,9 +78,9 @@ export function makeVariant(overrides: Partial<SkuVariant> = {}): SkuVariant {
   return { ...base, ...overrides };
 }
 
-/** 构造一个 DailyInventory 项。 */
-export function makeDailyInventory(overrides: DailyInventory): DailyInventory {
-  // date 是必填，所以 caller 必须传。base 只填 stock/sold 默认值。
+/** 构造一个 DailyInventory 项。caller 必须传 date（schema 必填）。 */
+export function makeDailyInventory(overrides: Partial<DailyInventory> & { date: string }): DailyInventory {
+  // Partial<DailyInventory> & { date: string } — date 必填，其它用 base 默认
   const base: Omit<DailyInventory, 'date'> = { stock: 10, sold: 0 };
   return { ...base, ...overrides };
 }
