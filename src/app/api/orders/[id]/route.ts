@@ -27,7 +27,13 @@ export const GET = withAuth(async (req, user) => {
     throw new AppError('INVALID_ID', 'Invalid order id', 400);
   }
   await connectDB();
-  const order = await Order.findById(id).lean();
+  // C13 #7: 项目化字段——前端订单详情只用 status/total/items/contact/payment.provider，
+  // 不返回 _id/__v/createdAt/updatedAt 之外的所有字段，减少 JSON 体积 + PII 泄露面。
+  const order = await Order.findById(id)
+    .select(
+      'orderNo userId status totalAmountInCents createdAt expiresAt paidAt cancelledAt refundedAt contact remark payment items'
+    )
+    .lean();
   if (!order) throw new AppError('NOT_FOUND', 'Order not found', 404);
   // 授权：订单 owner，或 admin/staff。staff 当前等同 admin（Cycle 5 已标 TODO，
   // 待 Product.merchantId schema 改动后收紧到"只看自家商品的订单"）。
