@@ -39,8 +39,13 @@ if (typeof import.meta !== 'undefined' && import.meta.hot) {
  *  - 部署在反代后请在反代层（nginx/vercel）配置：
  *    nginx: `proxy_set_header X-Real-IP $remote_addr;` 并 `set_real_ip_from <proxy_ip>;`
  *    vercel: 自动注入 `x-vercel-forwarded-for`，Next.js 已解析到 `request.ip`。
+ *
+ * 失败模式（DoS 防御）：
+ *  - 一律返回 'unknown' 会让所有匿名请求共享同一个桶——任意客户端可触发全员 429。
+ *  - 因此返回 null：调用方用 path + UA 前缀做兜底分桶，既避免跨路径污染，
+ *    也限制单一 UA 的爆炸半径（攻击者需要伪造多样化的 UA 才能放大影响）。
  */
-function getClientIp(req: NextRequest): string {
+function getClientIp(req: NextRequest): string | null {
   const trustProxy = process.env.TRUST_PROXY === '1';
   if (trustProxy) {
     const xff = req.headers.get('x-forwarded-for');
@@ -56,7 +61,23 @@ function getClientIp(req: NextRequest): string {
   // (NextRequest.ip 是非标准字段，部分环境会存在)
   const reqWithIp = req as NextRequest & { ip?: string };
   if (reqWithIp.ip) return reqWithIp.ip;
-  return 'unknown';
+  return null;
+}
+
+/**
+ * 构造限流桶 key。
+ *
+ * 已知 IP：`<ip>:<path>`（按调用方和路径隔离，标准做法）。
+ * 未知 IP：`<path>:ua:<ua 前缀>` —— 仅在 IP 拿不到时启用，
+ *   避免所有匿名请求坍缩到 'unknown' 单桶形成 DoS 放大器。
+ *   UA 前缀 32 字符（截断长串/二进制噪音）；同一 UA 仍共享桶，但攻击者
+ *   需要变换 UA 才能放大爆炸半径。
+ */
+function buildBucketKey(req: NextRequest, ip: string | null): string {
+  const path = new URL(req.url).pathname;
+  if (ip) return `${ip}:${path}`;
+  const ua = req.headers.get('user-agent')?.slice(0, 32) ?? 'no-ua';
+  return `${path}:ua:${ua}`;
 }
 
 export interface RateLimitOpts {
@@ -70,9 +91,9 @@ export interface RateLimitOpts {
 
 export function rateLimit(opts: RateLimitOpts) {
   return function check(req: NextRequest): void {
+    const ip = getClientIp(req);
     const key =
-      opts.key?.(req) ??
-      `${getClientIp(req)}:${new URL(req.url).pathname}`;
+      opts.key?.(req) ?? buildBucketKey(req, ip);
     const now = Date.now();
     const b = buckets.get(key);
     if (!b || b.resetAt <= now) {
