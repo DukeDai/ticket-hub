@@ -15,7 +15,20 @@ interface Bucket {
   resetAt: number;
 }
 
-const buckets = new Map<string, Bucket>();
+/**
+ * HMR 守卫：globalThis 单例，避免 dev 下 HMR 反复重载导致 buckets 跨重载叠加
+ * （旧模块的 Map 会被丢弃，但定时器等副作用可能仍持有旧 Map 引用）。
+ * 生产构建 import.meta.hot 不存在，无需 .dispose 清理。
+ */
+const g = globalThis as unknown as { __rateLimitBuckets?: Map<string, Bucket> };
+const buckets: Map<string, Bucket> = g.__rateLimitBuckets ?? (g.__rateLimitBuckets = new Map());
+
+// 仅 dev / HMR 启用：重载时显式清空，避免 stale bucket 污染下一个模块实例。
+if (typeof import.meta !== 'undefined' && import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    buckets.clear();
+  });
+}
 
 /**
  * 提取客户端真实 IP。
