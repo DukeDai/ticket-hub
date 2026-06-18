@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { connectDB } from '@/lib/db';
-import { Product, Category } from '@/models';
+import { Product } from '@/models';
+import { listActiveCategoriesForUI } from '@/lib/services/CategoryService';
 
 export default async function HomePage() {
   await connectDB();
@@ -10,7 +11,7 @@ export default async function HomePage() {
       .sort({ salesCount: -1 })
       .limit(8)
       .lean(),
-    Category.find({ isActive: true }).sort({ sortOrder: 1 }).lean(),
+    listActiveCategoriesForUI(),
   ]);
 
   return (
