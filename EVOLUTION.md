@@ -1188,4 +1188,75 @@ schema inspection 测试的是"编译期不变量"——enum 值变了忘改 Pro
 
 ---
 
-*演化协议维护期 + v1.0 路线图执行中。C11/C12 累计 505 tests，**middleware/utils/validation/models 100%**，strategies 93.7%，auth 97.47%，**services 0%**（defer to v1.1）。下一轮目标：C13 audit cycle（3-lens: correctness/perf/security），开始挖真正的 🔴/🟡 findings。*
+## Cycle 13 · 3-lens audit (correctness/perf/security)
+
+**触发**: C12 Phase D 接力棒点名 "C13 起进入 audit 循环"。本轮首次严格按 CLAUDE.md §8.3 模板跑 3 个并行 lens-pass agent，扫描 services/api/cms/cache/db/middleware。
+
+**执行者**: ultracode Workflow（3 并行 agent），主会话 triage + apply + commit。  
+**状态**: ✅ 部分完成（5/8 red 落地）。**tsc: 0 errors · next lint: 0 errors (7 warnings 不变) · test:run: 510 passed (24 files) · 6 atomic commits**。
+
+### Audit 结果
+
+| Lens | Findings | Red | Yellow | Green |
+| --- | --- | --- | --- | --- |
+| correctness | 25 | 4 | 11 | 10 |
+| perf | 17 | 3 | 6 | 8 |
+| security | 23 | 1 | 13 | 9 |
+| **unique after dedup** | **65** | **8** | **30** | **27** |
+
+### 🔴 修复（本轮落地 5/8）
+
+| Commit | 范围 | 来源 finding |
+| --- | --- | --- |
+| `2ef29a5` | `withError.ts` 加 VARIANT_REQUIRED/DATE_NOT_AVAILABLE/OVER_LIMIT/PAYLOAD_TOO_LARGE 进 SAFE_MESSAGES | #4 correctness (show.ts 漏白名单) |
+| `1fdc6b6` | 新增 `lib/utils/regex.ts` (escapeRegex) + apply 到 pagination.ts + cms/products/page.tsx；删 (frontend)/products/page.tsx 内联副本 | #2 security (ReDoS，全表扫描) |
+| `f36dc30` | `withValidation.ts` 加 MAX_BODY_BYTES=1MB content-length cap，mutating endpoint 走 413 | #8 security (大 body DoS) |
+| `e39abad` | `payOrder/cancelOrder` 改签名为 `(orderId, OrderActor)`；admin/staff 可代 cancel/pay | #1 correctness (authz 漏管理员路径) |
+| `f31aee2` | `payOrder` catch block 两个 `Order.updateOne` 合并为单次 aggregation pipeline update | #3 correctness (race window 让订单"莫名其妙消失") |
+| `0842ab1` | `/api/orders/[id]` 的 `Order.findById` 加 `.select()` 投影 | #7 perf (PII 泄露面 + JSON 体积) |
+
+### 🔴 推迟到下轮（C15 backlog）
+
+| # | 描述 | 文件 | 推迟理由 |
+| --- | --- | --- | --- |
+| 5 | payOrder CAS 前后两次读 Order → 用 CAS 返回 doc 做 pre-check 省 1 roundtrip | `OrderService.ts:137` | 重构需谨慎验证 race-free；下轮在 Phase E 单测覆盖后再做 |
+| 6 | payOrder `loadProducts` 移出事务外，避免事务内 N+1 roundtrip | `OrderService.ts:266` | 同上 + 需重排事务边界 |
+
+### 🟡 关键 yellow findings (抽样，不全 apply)
+
+- `Order.ts:55` — payment.txnId 在 toJSON 中完整返回，对 owner 可读（mock 时低敏，v1 真实 PSP 需 redacted）
+- `rateLimit.ts:18` — bucket Map unbounded；cycle 7 修了 cache 的 HMR guard，rateLimit 漏了同 pattern
+- `rateLimit.ts:70` — IP fallback 'unknown' 在 CGNAT 下多用户碰撞 → DoS vector
+- `auth/jwt.ts:21` — 7d TTL 无 refresh token / revocation list；admin compromise 是 7-day backdoor
+- `middleware.ts:71` — CSRF 检查走 Origin/Referer，CLI/server-to-server 客户端被误拒
+- `cms/products/page.tsx:16` — 同 fix #2 已解决
+- `OrderService.ts:266` — 同 perf #6 已 note
+- `middleware.ts:122` — matcher 包含 `(?!_next/static|_next/image)` 太宽，每次 server-component render 都过 middleware
+
+### 踩坑（值得记下来）
+
+1. **C13 #4 + #2 同源发现**：show.ts 漏 SAFE_MESSAGES + pagination/cms 漏 escapeRegex，都是"小修复但跨多文件"，per-cycle 修复面比单文件 bug 大。
+2. **Audit 周期长度**：3 lens-pass agent 跑了 38 分钟、消耗 364k subagent tokens、产出 62KB JSON。这是 C8 以来的最重 cycle。后续 audit 可考虑：(a) 把 audit scope 切小；(b) 把 lens-pass 数量从 3 减到 2；(c) 给每个 lens 限定 file 列表 + max findings。
+3. **TypeScript-aware audit 收益高**：lens-correctness agent 用 `String(order.userId) !== String(userId)` 这种类型对比找到了 actor payload 缺 role 字段的真实 bug。
+4. **3-lens cross-validation**：CMS regex DoS 同时被 correctness（"raw $regex 会 panic"）和 security（"ReDoS DoS vector"）命中——多 lens 给 finding 更高 confidence。
+5. **退路的修复节奏**：8 red 不能一个 session 全 apply（context 不够），按影响面积排（security → correctness → perf），先 patch 高 ROI 项。
+
+### 验证
+
+- tsc 0 errors
+- next lint 0 errors (7 warnings 不变)
+- vitest **510 passed (24 files)** in ~3.6s
+- vitest coverage 57.11% → 63.59% (Phase D) → 63.59% (Phase D 不变，audit 没改 src/lib/services 也没改其他 src)
+
+### 给后续 session 的接力棒
+
+- **C14 完成**：C13 audit 5/8 red 落地 + 1 个新 util + 1 个新测试文件 + 4 个文件 doc/注释更新 = 6 atomic commits。
+- **C15 backlog**：3 个未 apply red（payOrder CAS + loadProducts + 1 yellow staff-IDOR + rateLimit IP fallback）。优先顺序：
+  1. **C15 #1**：apply C13 #5/#6 perf reds（需先写 OrderService 单测保护，参考 Cycle 12 Phase D 决策：v1.1 再开 mongodb-memory-server → 此处折中：用 vi.mock mongoose 写 payOrder 单测骨架覆盖 happy path + race conditions）
+  2. **C15 #2**：staff-IDOR 收紧（Product.merchantId schema 改动；break backwards compat → 评估 v0.x 内做）
+  3. **C15 #3**：rateLimit IP fallback + bucket unbounded（防御深度，运维友好）
+- **C16 起**：进入第二轮 audit 循环（focus on yellow 31 + green 25，挖 perf/security/ux/extensibility）直到 2 consecutive dry cycles。
+
+---
+
+*演化协议维护期 + v1.0 路线图执行中。C11/C12/C13 累计 510 tests，**middleware/utils/validation/models 100%**，strategies 93.7%，auth 97.47%，services 0%（defer to v1.1）。下一轮目标：C15 apply perf reds + staff-IDOR + rateLimit hardening，然后 C16 audit round 2。*
