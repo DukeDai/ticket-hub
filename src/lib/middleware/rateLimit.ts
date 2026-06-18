@@ -16,19 +16,12 @@ interface Bucket {
 }
 
 /**
- * HMR 守卫：globalThis 单例，避免 dev 下 HMR 反复重载导致 buckets 跨重载叠加
- * （旧模块的 Map 会被丢弃，但定时器等副作用可能仍持有旧 Map 引用）。
- * 生产构建 import.meta.hot 不存在，无需 .dispose 清理。
+ * HMR 守卫：globalThis 单例，dev 下 HMR 重载后 buckets 仍存活（不被叠加）。
+ * 旧模块实例的 Map 会被丢弃，但 globalThis 上的引用保留，因此新实例复用同一份 bucket。
+ * 镜像 src/lib/cache.ts 的实现。
  */
 const g = globalThis as unknown as { __rateLimitBuckets?: Map<string, Bucket> };
 const buckets: Map<string, Bucket> = g.__rateLimitBuckets ?? (g.__rateLimitBuckets = new Map());
-
-// 仅 dev / HMR 启用：重载时显式清空，避免 stale bucket 污染下一个模块实例。
-if (typeof import.meta !== 'undefined' && import.meta.hot) {
-  import.meta.hot.dispose(() => {
-    buckets.clear();
-  });
-}
 
 /**
  * 提取客户端真实 IP。
