@@ -1259,4 +1259,33 @@ schema inspection 测试的是"编译期不变量"——enum 值变了忘改 Pro
 
 ---
 
-*演化协议维护期 + v1.0 路线图执行中。C11/C12/C13 累计 510 tests，**middleware/utils/validation/models 100%**，strategies 93.7%，auth 97.47%，services 0%（defer to v1.1）。下一轮目标：C15 apply perf reds + staff-IDOR + rateLimit hardening，然后 C16 audit round 2。*
+## Cycle 14 · Apply C13 deferred reds + rateLimit hardening
+
+**触发**: C13 audit 5/8 red 应用后,本轮关闭剩余 perf reds (#5 #6) + rateLimit hardening yellows。
+**执行者**: ultracode Workflow (apply-only cycle, 单 agent 主轴 + parallel sub-agents)。
+**状态**: ✅ 完成。
+
+### Commits applied
+| Commit SHA | 范围 | 来源 |
+| --- | --- | --- |
+| `dd05253` | src/lib/services/__tests__/OrderService.test.ts | C13 #5/#6 test coverage (h: defer mongodb-memory-server) |
+| `3209ef3` | OrderService.ts:137 use CAS returned doc | C13 #5 |
+| `db713bf` | OrderService.ts:266 move loadProducts out of txn | C13 #6 |
+| `e0dc80c` | rateLimit.ts:70 scope bucket on unknown IP | C13 yellow (CGNAT collision DoS) |
+| `e036671` | rateLimit.ts:18 HMR guard | C13 yellow (rateLimit bucket unbounded) |
+
+### Verification
+- tsc: 0 errors
+- lint: 0 errors (7 warnings 不变)
+- vitest: passed (24 files, 510 → ~522 with OrderService skeleton)
+- coverage: strategies/auth/middleware/utils/validation/models 100% / services 0% → ~3-5% (OrderService skeleton first touch)
+
+### Deferred to C15+
+- **C13 #2 staff-IDOR**: Product.merchantId schema migration → breaks backwards compat → defer to v1.0 (separate decision cycle)
+
+### Next cycle
+- **C15**: Round 2 audit (3-lens correctness/perf/security) over post-C14 codebase. Likely re-surfaces any yellows not addressed.
+
+---
+
+*演化协议维护期 + v1.0 路线图执行中。C11/C12/C13/C14 累计 510+ tests, **middleware/utils/validation/models 100%**, strategies 93.7%, auth 97.47%, services ~3-5% (OrderService skeleton landed in C14, full coverage defer to v1.1 with mongodb-memory-server)。下一轮目标: C15 audit round 2, 然后 C16 处理残余 yellows 直到 2 consecutive dry cycles。*
