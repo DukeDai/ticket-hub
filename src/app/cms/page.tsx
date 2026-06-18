@@ -1,15 +1,38 @@
 import Link from 'next/link';
 import { connectDB } from '@/lib/db';
 import { Product, Order, User, Voucher } from '@/models';
+import { cacheSWR } from '@/lib/cache';
 
 export default async function CmsDashboard() {
   await connectDB();
+  // countDocuments on unfiltered collections is a full scan (C15 perf red）。
+  // Wrap in cacheSWR with short TTL so the dashboard stays cheap across renders.
+  // Invalidation: not done here because count deltas are eventual-acceptable
+  // for a 30s-old counter; explicit cacheDeletePrefix('cms:dashboard:') lives
+  // in the write services if exactness becomes important (v1.0 task).
   const [productCount, orderCount, userCount, voucherCount, recentOrders] = await Promise.all([
-    Product.countDocuments({}),
-    Order.countDocuments({}),
-    User.countDocuments({}),
-    Voucher.countDocuments({}),
-    Order.find({}).sort({ createdAt: -1 }).limit(5).lean(),
+    cacheSWR('cms:dashboard:count:products', () => Product.countDocuments({}), {
+      ttlMs: 30_000,
+      staleMs: 60_000,
+    }),
+    cacheSWR('cms:dashboard:count:orders', () => Order.countDocuments({}), {
+      ttlMs: 30_000,
+      staleMs: 60_000,
+    }),
+    cacheSWR('cms:dashboard:count:users', () => User.countDocuments({}), {
+      ttlMs: 30_000,
+      staleMs: 60_000,
+    }),
+    cacheSWR('cms:dashboard:count:vouchers', () => Voucher.countDocuments({}), {
+      ttlMs: 30_000,
+      staleMs: 60_000,
+    }),
+    // recentOrders: 显式投影只取 dashboard 表格需要的字段，避免回 contact/payment/items[] 全文档。
+    Order.find({})
+      .select('orderNo totalAmountInCents status createdAt')
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .lean(),
   ]);
 
   const stats = [
