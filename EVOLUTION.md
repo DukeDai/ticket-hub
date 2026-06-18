@@ -1286,6 +1286,52 @@ schema inspection 测试的是"编译期不变量"——enum 值变了忘改 Pro
 ### Next cycle
 - **C15**: Round 2 audit (3-lens correctness/perf/security) over post-C14 codebase. Likely re-surfaces any yellows not addressed.
 
+## Cycle 15 · Round 2 audit + apply top reds
+
+**触发**: C14 收尾后 3-lens round 2 审计（correctness / performance / security）已完成；本轮关闭 4 个 red。  
+**执行者**: ultracode Workflow (audit-only cycle + apply-only cycle)。  
+**状态**: ✅ 完成。
+
+### Audit input
+- 3 lens-passes: correctness (15 findings), performance (15 findings), security (15 findings)。
+- Cross-lens dedup: register + login token-name 合并为 1 finding；cms dashboard 查询被 perf + security 同时报，保留 perf red。
+- Triage: 11 red（仅 4 在 C15 budget 内可安全 apply）/ 24 yellow / 10 green。
+
+### Commits applied
+| Commit SHA | 范围 | 来源 | Lens |
+| --- | --- | --- | --- |
+| `82cc48a` | api/auth/{register,login}/route.ts | 修复 signAccessToken payload 缺 `name` —— verifyAccessToken 必抛 → 整条 auth 流程对刚注册/刚登录的用户 500 | correctness |
+| `1be7dff` | lib/services/OrderService.ts | payOrder 两处 `.catch(() => undefined)` 替换为 `console.warn` —— ownership-fail + txn-fail rollback 失败时有可观测性 | correctness |
+| `866e4c2` | lib/auth/guard.ts + login/page.tsx + LoginForm.tsx | 新增 `safeRedirect()`，login `?redirect=` 经 same-origin allowlist 校验，杜绝 open redirect / 钓鱼 | security |
+| `f5156be` | app/cms/page.tsx | 4 个 countDocuments 包入 cacheSWR (30s TTL)；recentOrders 加 `.select()` 避免回 contact/payment/items[] | perf |
+
+### Verification
+- tsc: 0 errors
+- vitest: PASS (520 tests)
+- OrderService.test.ts: 3/3 pass — `.catch((err) => …)` callback 签名兼容。
+
+### RedsDeferred
+| Finding | Reason |
+| --- | --- |
+| OrderService cancelOrder IDOR pre-read (security red) | Requires broader service refactor + staff merchantId scoping — defer to v1.0 |
+| viewCount $inc DoS amplification (perf red) | Already in C5 backlog as P1 deferred; needs per-IP throttle → v1.0 |
+| cms/page.tsx 缺 `requireAdmin()` defense-in-depth (security red) | `cms/layout.tsx` already gates; defer until page-level auth pattern stabilized |
+| jwt.ts min-length check in production (security red) | Operational posture change; needs deployment runbook → defer to v1.0 |
+| OrderService.ts:265 simpleStock $expr race | Low confidence — needs mongodb-memory-server to verify; defer to v1.1 |
+| OrderService.ts:220 inner save + throw is dead code | Wasteful 1 roundtrip but not incorrect; defer cleanup |
+| Category list duplication across 5 callers (perf red) | Requires new `listActiveCategoriesForUI()` service + cache; defer to C16+ |
+| CartService.updateCartItem stale-read race | Currently mitigated by checkout-time stock check; document in cycle 16 |
+| CartService double-push race comment misleading | Comment-only fix; defer to C16 |
+| Order route ID parsing + pay rate limit | Defensive-coding; low-risk yellow |
+| middleware matcher too broad | Low-priority yellow |
+| CMS edit page categories dropdown not cached | Already covered by central listActiveCategories proposal above |
+
+### Next cycle (C16)
+- Apply central `listActiveCategoriesForUI()` service + `cacheSWR('cms:categories:active')` to collapse 5 duplicate query sites。
+- Apply fix CartService double-push comment + audit stale-read race accept.
+- Apply defensive ID parsing in `/api/orders/[id]/pay/route.ts` (use NextRequest 2nd-arg params).
+- Continue yellows until 2 consecutive clean cycles。
+
 ---
 
-*演化协议维护期 + v1.0 路线图执行中。C11/C12/C13/C14 累计 510+ tests, **middleware/utils/validation/models 100%**, strategies 93.7%, auth 97.47%, services ~3-5% (OrderService skeleton landed in C14, full coverage defer to v1.1 with mongodb-memory-server)。下一轮目标: C15 audit round 2, 然后 C16 处理残余 yellows 直到 2 consecutive dry cycles。*
+*演化协议维护期 + v1.0 路线图执行中。C11–C15 累计 520+ tests, **middleware/utils/validation/models 100%**, strategies 93.7%, auth 97.47%, services ~3-5% (OrderService skeleton landed in C14, full coverage defer to v1.1 with mongodb-memory-server)。C15 applied 4 atomic commits closing 4 red findings (1 critical correctness regression in auth flow, 1 observability gap in payOrder, 1 high-severity open-redirect, 1 dashboard perf). C16 target: collapse Category query duplication + remaining yellows.*
