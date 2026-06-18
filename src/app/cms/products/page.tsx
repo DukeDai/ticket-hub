@@ -1,8 +1,9 @@
 import Link from 'next/link';
 import { connectDB } from '@/lib/db';
-import { Product, Category } from '@/models';
+import { Product } from '@/models';
 import { Button } from '@/components/ui/Button';
 import { escapeRegex } from '@/lib/utils/regex';
+import { listActiveCategoriesForUI } from '@/lib/services/CategoryService';
 
 export default async function CmsProductsPage({
   searchParams,
@@ -24,7 +25,7 @@ export default async function CmsProductsPage({
       .select('title slug images priceInCents stock sold salesCount status ticketType categoryId')
       .lean(),
     Product.countDocuments(filter),
-    Category.find({ isActive: true }).select('name').lean(),
+    listActiveCategoriesForUI(),
   ]);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const catMap = new Map(categories.map((c) => [String(c._id), c.name]));
