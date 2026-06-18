@@ -189,7 +189,10 @@ export async function payOrder(orderId: string, actor: OrderActor) {
     await Order.updateOne(
       { _id: orderId, status: 'paying' },
       [{ $set: { status: 'pending' } }]
-    ).catch(() => undefined);
+    ).catch((err: unknown) => {
+      // 不吞：让 ops 能区分"回退成功但因为状态变化没匹配到"（预期）和"DB 写失败"（异常）。
+      console.warn(`[payOrder] ownership-fail rollback failed for order ${orderId}`, err);
+    });
     throw new AppError('FORBIDDEN', 'Not your order', 403);
   }
 
@@ -366,7 +369,11 @@ export async function payOrder(orderId: string, actor: OrderActor) {
           },
         },
       ]
-    ).catch(() => undefined);
+    ).catch((err: unknown) => {
+      // 事务失败后的状态回退如果也失败（例如 Mongo 短暂不可用），订单会卡在 'paying'
+      // 直到 5min TTL 兜底清掉。日志让 ops 能区分"正常回退"vs"回退 DB 写挂了"。
+      console.warn(`[payOrder] transaction-fail rollback failed for order ${orderId}`, err);
+    });
     throw err;
   } finally {
     await session.endSession();
