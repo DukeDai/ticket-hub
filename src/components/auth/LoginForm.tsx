@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
+import { safeRedirect } from '@/lib/auth/guard';
 
 export function LoginForm({ redirectTo }: { redirectTo: string }) {
   const router = useRouter();
@@ -24,7 +25,7 @@ export function LoginForm({ redirectTo }: { redirectTo: string }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error?.message ?? '登录失败');
-      router.push(redirectTo);
+      router.push(safeRedirect(redirectTo, '/'));
       router.refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : '登录失败');
