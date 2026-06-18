@@ -27,6 +27,7 @@ export default defineConfig({
         'src/lib/services/**',
         'src/lib/auth/**',
         'src/lib/utils/**',
+        'src/models/**',
       ],
       exclude: [
         '**/*.d.ts',
