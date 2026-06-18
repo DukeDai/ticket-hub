@@ -1,10 +1,8 @@
-import { connectDB } from '@/lib/db';
-import { Category } from '@/models';
 import { ProductForm, type CategoryOption } from '../ProductForm';
+import { listActiveCategoriesForUI } from '@/lib/services/CategoryService';
 
 export default async function NewProductPage() {
-  await connectDB();
-  const cats = await Category.find({ isActive: true }).lean();
+  const cats = await listActiveCategoriesForUI();
   const categories: CategoryOption[] = cats.map((c) => ({
     id: String(c._id),
     name: c.name,
