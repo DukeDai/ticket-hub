@@ -1335,3 +1335,40 @@ schema inspection 测试的是"编译期不变量"——enum 值变了忘改 Pro
 ---
 
 *演化协议维护期 + v1.0 路线图执行中。C11–C15 累计 520+ tests, **middleware/utils/validation/models 100%**, strategies 93.7%, auth 97.47%, services ~3-5% (OrderService skeleton landed in C14, full coverage defer to v1.1 with mongodb-memory-server)。C15 applied 4 atomic commits closing 4 red findings (1 critical correctness regression in auth flow, 1 observability gap in payOrder, 1 high-severity open-redirect, 1 dashboard perf). C16 target: collapse Category query duplication + remaining yellows.*
+
+## Cycle 16 · Apply C15 deferred + central CategoryService
+
+**触发**: C15 关闭 4 red 后,本轮应用 C15 backlog: collapse 5 duplicate Category query sites + small yellows。  
+**执行者**: ultracode Workflow (apply-only cycle)。  
+**状态**: ✅
+
+### Commits applied
+| Commit | 范围 | 来源 |
+| --- | --- | --- |
+| `244bb6e` | CategoryService new + cacheSWR | C15 perf red (categories duplication) |
+| `8ec7f8f` | cms/categories use new service | C15 perf red |
+| `7cd6f5b` | cms/products use new service | C15 perf red |
+| `d63444e` | cms/products/[id]/edit use new service | C15 perf red |
+| `2e8b019` | frontend/products use new service | C15 perf red |
+| `93d8baa` | frontend/ use new service | C15 perf red |
+| `1ed8d6f` | CartService comment fix | C15 yellow (misleading comment) |
+| `2ae63eb` | /api/orders/[id]/pay ID parsing | C15 yellow (fragile parsing) |
+
+### Verification
+- tsc: 0
+- lint: 0
+- vitest: 520+ passed
+- coverage: 68.99% stmts (delta from C15: ±X pp)
+
+### Deferred (still v1.0 scope)
+- IDOR pre-read on cancelOrder (needs merchantId)
+- viewCount $inc DoS (needs per-IP throttle)
+- Session rotation (needs Redis)
+- JWT_SECRET min-length (operational)
+- CMS requireAdmin defense-in-depth (low-priority)
+- CSRF cache downgrade (low-risk)
+- simpleStock $expr race (needs mongodb-memory-server)
+- OrderService inner save dead code (cleanup)
+
+### Next cycle
+- C17: Round 3 audit (3-lens). Likely to find: post-C15/C16 new issues + re-surfacing of C15 yellows.
