@@ -1121,4 +1121,71 @@ fixtures 复用 Phase B 已落地的 `src/lib/auth/__tests__/fixtures.ts`（make
 
 ---
 
-*演化协议维护期 + v1.0 路线图执行中。C11/C12/C13 累计 384 tests，middleware/utils/validation 100%，strategies 93.7%，**auth 97.47%**。下一轮目标：services 测试（开 mongodb-memory-server 决策，C12 Phase D）→ Playwright E2E（v1.1）。*
+## Cycle 12 Phase D · model schema 契约测试（pure-schema 路径）
+
+**触发**: C12 Phase C 接力棒点名"Phase D — services 低垂果实"。handoff 列了两个候选：(a) auth/index.ts 100% 覆盖（实测 `src/lib/auth/index.ts` 不存在 → 跳过）；(b) model 层 vi.mock mongoose (~20 tests)。本轮发现第三条更优路径：**不连 DB，直接 inspect `Product.schema` 等**。
+
+**执行者**: 主会话（无 workflow fan-out，单一线性工作流）。  
+**状态**: ✅ 完成。**tsc: 0 errors · next lint: 0 errors (7 warnings 不变) · test:run: 505 passed (23 files) · coverage: 57.11% → 63.59% statements (+6.48pp) · 6 个 model 文件全部 100/100/100/100**。
+
+### 关键决策：pure-schema testing 路径
+
+为什么选 schema inspection 而非 vi.mock mongoose 或 mongodb-memory-server：
+
+| 路径 | 代价 | 收益 | 决策 |
+| --- | --- | --- | --- |
+| vi.mock mongoose models | ~20 tests，但只能断言 mock 的 call shape，不能验证 schema 本身的 enum/default/index 是否正确 | 低 | ❌ |
+| mongodb-memory-server | ~50 tests，~1000 行 services 全覆盖 | 高 | ❌（v1.1） |
+| **schema inspection** | **~120 tests 直接覆盖 schema 本身** | **极高** | ✅ |
+
+schema inspection 测试的是"编译期不变量"——enum 值变了忘改 Product schema？Category.Product 一致性测试立刻挂。Index 被删？`{ status, salesCount }` 索引断言立刻挂。`toJSON` transform 漏删 passwordHash？User 安全测试立刻挂。这是"业务安全网"，比 service 行为测试更基础。
+
+### 范围
+
+1 个 atomic commit（git log 顺序）：
+
+| Commit | 范围 | 文件 | 净行数 |
+| --- | --- | --- | --- |
+| `test(models)` | 6 个 schema 契约测试 + vitest.config.ts | 7 | +837 |
+
+### model/ 测试（121 tests / 6 files / 100% stmt-branch-fn-line 全覆盖）
+
+| 文件 | tests | 关键覆盖 |
+| --- | --- | --- |
+| `Product.test.ts` | 33 | collection='products'、timestamps、required fields（title/slug/description/categoryId/ticketType/priceInCents/createdBy）、ticketType enum 与 Category 一致、status enum (draft/active/offline) + default 'draft'、所有 default (images/skuVariants/dailyInventory/refundable/instantConfirm/viewCount/salesCount/stock/sold)、min/max 约束（priceInCents/stock/sold/rating 0-5/purchaseLimit ≥1）、text index (CLAUDE.md §4)、3 个 load-bearing compound indexes（{status,salesCount}/{categoryId,status,salesCount}/{location.city,status}）、toJSON transform + versionKey:false |
+| `Order.test.ts` | 24 | collection='orders'、required fields（orderNo/userId/totalAmountInCents + contact.name/contact.phone/items.productId/items.productSnapshot.title/items.productSnapshot.ticketType/items.quantity/items.unitPriceInCents）、7 状态 enum 含 paying/partial_refunded + default 'pending'、items 默认空数组、payment.provider default 'mock'、remark maxlength 500、load-bearing indexes（{userId,createdAt}/{status,expiresAt}）、TTL：单字段 {expiresAt:1} expireAfterSeconds=0 partialFilter status:pending + 单字段 {updatedAt:1} expireAfterSeconds=300 status:paying (C8 加固)、toJSON + versionKey |
+| `Cart.test.ts` | 12 | collection='carts'、required fields（userId/items.productId/items.quantity 1-99/items.priceAtAddInCents ≥0）、per-user 单例：userId unique:true（CLAUDE.md §4）、defaults (items=[], items.variantId=null, items.visitDate=null)、visitDate 是 String 不是 Date（CLAUDE.md §2.2 日历日）、Cart 无 toJSON（反断言——保护默认行为） |
+| `Category.test.ts` | 14 | collection='categories'、required fields (name/slug/ticketType)、ticketType enum（5 个值）、**Product.ticketType enum 与 Category 一致**（跨 schema 防 desync）、slug unique+indexed、defaults (sortOrder=0/isActive=true/parentId=null)、name maxlength 40、复合 index {parentId, sortOrder} |
+| `User.test.ts` | 18 | collection='users'、required fields (email/passwordHash/name)、role enum (user/staff/admin) + default 'user'、**passwordHash select:false**（默认查询不返回）+ toJSON transform 二次剥除（即使 select 出来也剥）、email unique+indexed+lowercase+trim（防大小写绕过去重）、phone regex `/^[\d\-\+\s]{6,20}$/` 接受 13800001234 / +86-138-0000-1234 / "138 0000 1234" 但拒绝字母/5 字符/21 字符、isActive default true、name maxlength 60、toJSON + versionKey |
+| `Voucher.test.ts` | 20 | collection='vouchers'、required fields (code/orderId/orderNo/productId/productTitle/userId)、4 状态 enum (active/used/expired/refunded) + default 'active'、code unique（扫码核销关键）、4 个 indexes (code/orderId/orderNo/userId + load-bearing {status,expiresAt})、核销留痕字段 usedAt (Date) + usedBy (String + trim)、toJSON + versionKey |
+
+### 踩坑（值得记下来）
+
+1. **Mixed type default 是 plain object `{}`** — `path('attributes').options.default === {}` 永远 false（引用比较）。修法：`typeof resolved === 'object'`。
+2. **mongoose dot-notation path** — `schema.path('contact.name').isRequired` 直接可用，不需要遍历 `path('contact').schema.paths`。Order.test.ts 的 nested sub-schema 测试就是这样写。
+3. **`isRequired` 与 `default` 互斥语义** — 字段有 `default: 'foo'` 但未声明 `required: true` 时，`isRequired === false`。本轮 Order/Voucher/User 的 status/role 都是这个模式。测试要小心：不要把这些字段塞进"required fields"断言（会假阳性挂掉），单独写 enum+default 断言。
+4. **`schema.indexes()` 返回所有 declared indexes** — TTL index `{expiresAt:1}` 和复合 index `{status:1, expiresAt:1}` 都含 expiresAt 字段。用 `Object.keys(f).length === 1` 过滤才能命中"单字段 TTL"，否则会匹配到第一个含该字段的复合索引（fail）。
+5. **`require()` 在 vitest ESM 环境不可用** — Category.test.ts 最初用 `require('../Product')` 加载 Product schema 做跨 schema 一致性，失败。改顶层 `import { Product } from '../Product'` 直接用，零延迟。
+6. **status 字段的"应有 enum"vs"required"是两件不同的事** — 测试时分开写。`enumValues('status')` 测 enum 完整性，`isRequired` 测创建必填性。混在一起会导致 default 字段假阳性。
+
+### 验证
+
+- tsc 0 errors
+- next lint 0 errors (7 warnings 不变：6 个 `<img>` + 1 个 tailwind.config.js anonymous-default-export)
+- vitest **505 passed (23 files)** in ~4s
+- vitest coverage: **63.59% statements / 96.54% branches / 91.13% functions / 63.59% lines**
+- 6 个 model 文件：**Cart/Category/Order/Product/User/Voucher 全部 100% stmts / 100% branches / 100% functions / 100% lines**
+
+### 给后续 session 的接力棒
+
+- C12 Phase D 完成：累计测试 505 passed / 23 files / 6 个 include 目录中 5 个 ≥97%（middleware/utils/validation/models 100%，auth 97.47%，strategies 93.7%）。
+- 唯一 <90% 的 include 目录：`src/lib/services/**`（5 个 service 文件，~33KB / ~1000 行）—— 这是 mongodb-memory-server 决策的最后触发点。
+- 剩余低垂果实选项：
+  1. **a. mongodb-memory-server**（v1.1 与 Playwright E2E 一起引入）—— 已 defer
+  2. **b. component tests**（happy-dom + @testing-library/react 已装但未用）—— 覆盖 `src/components/**` 0% 的现状
+  3. **c. route handler tests**（已有 withError/withAuth/withValidation 测试，但 `src/app/api/**/route.ts` 业务逻辑未直接覆盖）
+- **C13 起**：进入 audit 循环（CLAUDE.md §8.1），开始挖真正的 🔴/🟡 findings（bug/perf/security/ux/extensibility/docs/code-smell）。test coverage 不再是主线。
+
+---
+
+*演化协议维护期 + v1.0 路线图执行中。C11/C12 累计 505 tests，**middleware/utils/validation/models 100%**，strategies 93.7%，auth 97.47%，**services 0%**（defer to v1.1）。下一轮目标：C13 audit cycle（3-lens: correctness/perf/security），开始挖真正的 🔴/🟡 findings。*
