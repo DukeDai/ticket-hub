@@ -193,6 +193,12 @@ export async function payOrder(orderId: string, actor: OrderActor) {
     throw new AppError('FORBIDDEN', 'Not your order', 403);
   }
 
+  // C13 #6：在事务外预加载订单关联的 product，避免事务内的 N+1 $in roundtrip。
+  // 这里的 $in 查询很轻量；放在事务里会因为 connection pool 占位 + 事务时间窗拉长而显著放大延迟。
+  // 代价：若事务后续失败，这次 load 是浪费的——但概率低、代价小，比事务内 hot path 上的开销更划算。
+  const productIds = Array.from(new Set(claimed.items.map((i: IOrderItem) => i.productId)));
+  const productMap = await loadProducts(productIds.map((id) => String(id)));
+
   // 3) 进入事务完成实际支付流程
   const session = await mongoose.startSession();
   try {
@@ -281,9 +287,7 @@ export async function payOrder(orderId: string, actor: OrderActor) {
       };
       await order.save({ session });
 
-      // 3) 签发 voucher
-      const productIds = Array.from(new Set(order.items.map((i: IOrderItem) => i.productId)));
-      const productMap = await loadProducts(productIds.map((id) => String(id)));
+      // 3) 签发 voucher（productMap 已在事务外预加载，见 C13 #6）
       const voucherDocs = [];
       for (const it of order.items) {
         const product = productMap.get(String(it.productId));
