@@ -283,19 +283,17 @@ describe('withAuth', () => {
     });
 
     it('additional positional args forwarded to handler (function-form uses P generic)', async () => {
-      // The function-form overload types P as rest args, but the implementation
-      // currently only accepts (req) — extra args are not forwarded.
-      // This test pins the current behavior: a handler with extra args never sees them.
+      // C15 fix：函数式 overload 通过 P generic 约束类型，实现层把剩余位置参数透传给 handler。
+      // 这让 Next.js 14 动态路由 handler 可以直接接收 `{ params }` 第二参数。
       const handler = vi.fn(async (_req: any, _user: any, extra: string) => new Response(extra));
       const token = await makeToken('user');
       const wrapped = withAuth<[string]>(handler);
       const req = setCookie(makeReq(), AUTH_COOKIE, token);
       const res = await (wrapped as unknown as (req: NextRequest, extra: string) => Promise<Response>)(req, 'hi');
       expect(res.status).toBe(200);
-      // Handler IS called (auth passes), but extra is undefined — implementation gap
       expect(handler).toHaveBeenCalledOnce();
       const args = handler.mock.calls[0]!;
-      expect(args[2]).toBeUndefined();
+      expect(args[2]).toBe('hi');
     });
   });
 

@@ -38,7 +38,7 @@ export function withAuth(
   const handler =
     typeof optsOrHandler === 'function' ? optsOrHandler : (maybeHandler as (req: NextRequest, user: AccessTokenPayload) => Promise<Response>);
 
-  return withError(async (req: NextRequest) => {
+  return withError(async (req: NextRequest, ...rest: unknown[]) => {
     const token = req.cookies.get(AUTH_COOKIE)?.value;
     let user: AccessTokenPayload | null = null;
     if (token) {
@@ -52,7 +52,11 @@ export function withAuth(
       if (opts.optional) {
         // 把 user 挂到 req 上，便于 HOF 链下游读取
         (req as NextRequest & { user?: AccessTokenPayload | null }).user = null;
-        return handler(req, null as never);
+        return (handler as unknown as (r: NextRequest, u: AccessTokenPayload | null, ...rest: unknown[]) => Promise<Response>)(
+          req,
+          null,
+          ...rest
+        );
       }
       throw new AppError('UNAUTHENTICATED', 'Login required', 401);
     }
@@ -61,6 +65,12 @@ export function withAuth(
     }
     // 把 user 挂到 req 上，便于 HOF 链下游读取（withValidation 包裹的 handler 可通过 req.user 取）
     (req as NextRequest & { user?: AccessTokenPayload | null }).user = user;
-    return handler(req, user);
+    // 透传剩余位置参数（Next.js 14 动态路由的 `{ params }` 第二参数等）。
+    // 函数式 overload 用 P generic 约束类型，实现层统一用 unknown[] 转发。
+    return (handler as unknown as (r: NextRequest, u: AccessTokenPayload, ...rest: unknown[]) => Promise<Response>)(
+      req,
+      user,
+      ...rest
+    );
   });
 }
