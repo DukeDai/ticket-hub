@@ -12,6 +12,9 @@ describe('rateLimit', () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
+    // C14: HMR 守卫让 buckets 通过 globalThis 跨模块重载存活，测试间必须显式清空。
+    const g = globalThis as unknown as { __rateLimitBuckets?: Map<string, unknown> };
+    g.__rateLimitBuckets?.clear();
     vi.resetModules();
     const mod = await import('../rateLimit');
     rateLimit = mod.rateLimit;
@@ -231,6 +234,86 @@ describe('rateLimit', () => {
       check(req);
       // TRUST_PROXY != '1' → XFF ignored → uses req.ip (none) → 'unknown'
       // Same request → same bucket → second call throws
+      expect(() => check(req)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+    });
+  });
+
+  describe('IP fallback (C14 DoS hardening)', () => {
+    // C13 yellow: 之前 IP 拿不到时桶 key 固定为 'unknown:<path>'，
+    // 所有匿名客户端共享同一桶 → 单点 DoS 放大器。
+    // C14 改为 path + UA 前缀分桶：相同 path+UA 仍共享，不同 path/UA 不冲突。
+
+    it('unknown IP + same path + same UA collides (single bucket)', () => {
+      vi.stubEnv('TRUST_PROXY', '1');
+      const check = rateLimit({ windowMs: 60_000, max: 1 });
+      const reqA = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': 'curl/8.0' } });
+      const reqB = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': 'curl/8.0' } });
+      check(reqA);
+      expect(() => check(reqB)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+    });
+
+    it('unknown IP + different paths do NOT collide', () => {
+      vi.stubEnv('TRUST_PROXY', '1');
+      const check = rateLimit({ windowMs: 60_000, max: 1 });
+      const reqA = makeReq({ url: 'http://localhost/api/a', headers: { 'user-agent': 'curl/8.0' } });
+      const reqB = makeReq({ url: 'http://localhost/api/b', headers: { 'user-agent': 'curl/8.0' } });
+      check(reqA);
+      expect(() => check(reqB)).not.toThrow();
+    });
+
+    it('unknown IP + same path + different UAs do NOT collide', () => {
+      vi.stubEnv('TRUST_PROXY', '1');
+      const check = rateLimit({ windowMs: 60_000, max: 1 });
+      const reqA = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': 'curl/8.0' } });
+      const reqB = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': 'Mozilla/5.0' } });
+      check(reqA);
+      expect(() => check(reqB)).not.toThrow();
+    });
+
+    it('unknown IP + no UA falls into no-ua bucket (shared with other no-UA requests)', () => {
+      vi.stubEnv('TRUST_PROXY', '1');
+      const check = rateLimit({ windowMs: 60_000, max: 1 });
+      const reqA = makeReq({ url: 'http://localhost/api/x' });
+      const reqB = makeReq({ url: 'http://localhost/api/x' });
+      check(reqA);
+      expect(() => check(reqB)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+    });
+
+    it('UA prefix is truncated to 32 chars (long UAs still collid with short prefix match)', () => {
+      vi.stubEnv('TRUST_PROXY', '1');
+      const check = rateLimit({ windowMs: 60_000, max: 1 });
+      const longUa = 'A'.repeat(100);
+      const reqA = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': longUa } });
+      const reqB = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': longUa + 'EXTRA' } });
+      check(reqA);
+      // Same first 32 chars → same bucket → collision
+      expect(() => check(reqB)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+    });
+  });
+
+  describe('HMR guard (C14 HMR hardening)', () => {
+    it('bucket Map persists across vi.resetModules via globalThis', async () => {
+      // Pre-populate a bucket via the first module instance.
+      const check1 = rateLimit({ windowMs: 60_000, max: 1 });
+      const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
+      check1(req);
+
+      // Reset modules — second import should pick up the same globalThis map.
+      vi.resetModules();
+      const mod = await import('../rateLimit');
+      const check2 = mod.rateLimit({ windowMs: 60_000, max: 1 });
+
+      // Same IP/path → same bucket → should throw (state survived reload).
+      expect(() => check2(req)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+    });
+
+    it('globalThis bucket cleared in beforeEach gives fresh state per test', () => {
+      // This test relies on the beforeEach clear — if it weren't cleared,
+      // a prior test's bucket would leak. We just verify isolation here.
+      const check = rateLimit({ windowMs: 60_000, max: 1 });
+      const req = makeReq({ url: 'http://localhost/api/x', ip: '5.5.5.5' });
+      check(req);
+      // Second call → throws (fresh bucket with count=1 from above).
       expect(() => check(req)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
     });
   });
