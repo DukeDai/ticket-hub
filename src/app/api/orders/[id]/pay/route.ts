@@ -9,6 +9,6 @@ export const POST = withAuth(async (req, user) => {
   if (!mongoose.isValidObjectId(id)) {
     throw new AppError('INVALID_ID', 'Invalid order id', 400);
   }
-  const order = await payOrder(id, user.sub);
+  const order = await payOrder(id, { userId: user.sub, role: user.role });
   return NextResponse.json({ order });
 });

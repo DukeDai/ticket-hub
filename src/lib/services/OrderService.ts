@@ -128,15 +128,26 @@ export async function createOrder(input: CreateOrderInput) {
  *    任一步失败则整体回滚，保证不超卖、不漏发 voucher。
  *  - 真实支付应改为 webhook 入口 + 签名校验 + 外部幂等键（如 stripe-signature / payment_intent_id）。
  */
-export async function payOrder(orderId: string, userId: string) {
+/**
+ * 操作的"主体"——业务身份。
+ * 比 (orderId, userId) 二元组多带 role，让 service 层可基于角色做授权
+ * （如 admin/staff 可代 cancel/pay；Cycle 13 audit #1）。
+ */
+export interface OrderActor {
+  userId: string;
+  role: 'user' | 'staff' | 'admin';
+}
+
+export async function payOrder(orderId: string, actor: OrderActor) {
   await connectDB();
   if (!mongoose.isValidObjectId(orderId)) {
     throw new AppError('INVALID_ID', 'Invalid order id', 400);
   }
+  const isPrivileged = actor.role === 'admin' || actor.role === 'staff';
   // 1) 预检查所有权（避免在已 cancelled 订单上做 CAS）
   const owner = await Order.findById(orderId).select('userId status').lean();
   if (!owner) throw new AppError('NOT_FOUND', 'Order not found', 404);
-  if (String(owner.userId) !== String(userId)) {
+  if (!isPrivileged && String(owner.userId) !== String(actor.userId)) {
     throw new AppError('FORBIDDEN', 'Not your order', 403);
   }
   if (owner.status === 'paid') {
@@ -180,7 +191,7 @@ export async function payOrder(orderId: string, userId: string) {
     await session.withTransaction(async () => {
       const order = await Order.findById(orderId).session(session);
       if (!order) throw new AppError('NOT_FOUND', 'Order not found', 404);
-      if (String(order.userId) !== String(userId)) {
+      if (!isPrivileged && String(order.userId) !== String(actor.userId)) {
         throw new AppError('FORBIDDEN', 'Not your order', 403);
       }
       // 防御：CAS 通过后此处只可能是 paying；如果不是说明状态机被破坏
@@ -337,11 +348,12 @@ export async function payOrder(orderId: string, userId: string) {
   }
 }
 
-export async function cancelOrder(orderId: string, userId: string) {
+export async function cancelOrder(orderId: string, actor: OrderActor) {
   await connectDB();
   const order = await Order.findById(orderId);
   if (!order) throw new AppError('NOT_FOUND', 'Order not found', 404);
-  if (String(order.userId) !== String(userId)) {
+  const isPrivileged = actor.role === 'admin' || actor.role === 'staff';
+  if (!isPrivileged && String(order.userId) !== String(actor.userId)) {
     throw new AppError('FORBIDDEN', 'Not your order', 403);
   }
   if (order.status !== 'pending') {
