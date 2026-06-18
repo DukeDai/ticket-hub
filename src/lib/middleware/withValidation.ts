@@ -8,8 +8,14 @@ import { withError, AppError } from './withError';
  * 设计：
  *  - 用泛型 + 高阶函数，handler 接收到的就是已校验的类型 T。
  *  - 校验失败抛 ZodError，由 withError 转 422。
- *  - 校验 body 前检查 content-length 与 content-type，规避大 body 攻击。
+ *  - 校验 body 前检查 content-length（防止大 body DoS）和 content-type。
+ *
+ * Body size cap（C13 #8）：mutating endpoint 默认 1MB；payload 超过即抛 413。
+ *   - Cart PATCH / Order POST 等用户输入场景不需要更大。
+ *   - Product POST（CMS）若需要更大可走 Server Action 或单独 HOF，v1 任务。
  */
+export const MAX_BODY_BYTES = 1 * 1024 * 1024; // 1MB
+
 export interface ValidatedRequest<TBody, TQuery> {
   body: TBody;
   query: TQuery;
@@ -19,6 +25,8 @@ export interface ValidatedRequest<TBody, TQuery> {
 interface Options<TBody extends ZodTypeAny, TQuery extends ZodTypeAny> {
   body?: TBody;
   query?: TQuery;
+  /** Override the default 1MB body cap (bytes). Pass `Infinity` to disable. */
+  maxBodyBytes?: number;
 }
 
 export function withValidation<TBody extends ZodTypeAny | undefined, TQuery extends ZodTypeAny | undefined>(
@@ -36,6 +44,17 @@ export function withValidation<TBody extends ZodTypeAny | undefined, TQuery exte
       const ct = req.headers.get('content-type') ?? '';
       if (!ct.includes('application/json')) {
         throw new AppError('UNSUPPORTED_MEDIA_TYPE', 'Content-Type must be application/json', 415);
+      }
+      // 先 cap 读 buffer，避免 req.json() 把 100MB 全读进内存再让 Zod 拒绝。
+      const cap = opts.maxBodyBytes ?? MAX_BODY_BYTES;
+      if (cap !== Infinity) {
+        const lenHeader = req.headers.get('content-length');
+        if (lenHeader) {
+          const len = Number(lenHeader);
+          if (Number.isFinite(len) && len > cap) {
+            throw new AppError('PAYLOAD_TOO_LARGE', `Request body exceeds ${cap} bytes`, 413);
+          }
+        }
       }
       try {
         body = await req.json();
