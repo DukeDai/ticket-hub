@@ -144,30 +144,23 @@ export async function payOrder(orderId: string, actor: OrderActor) {
     throw new AppError('INVALID_ID', 'Invalid order id', 400);
   }
   const isPrivileged = actor.role === 'admin' || actor.role === 'staff';
-  // 1) 预检查所有权（避免在已 cancelled 订单上做 CAS）
-  const owner = await Order.findById(orderId).select('userId status').lean();
-  if (!owner) throw new AppError('NOT_FOUND', 'Order not found', 404);
-  if (!isPrivileged && String(owner.userId) !== String(actor.userId)) {
-    throw new AppError('FORBIDDEN', 'Not your order', 403);
-  }
-  if (owner.status === 'paid') {
-    // 已支付 → 幂等返回当前订单。响应 200，前端可安全重试。
-    return (await Order.findById(orderId).lean()) as IOrder;
-  }
-  if (owner.status === 'cancelled') {
-    throw new AppError('ORDER_CANCELLED', 'Order has been cancelled', 422);
-  }
-  // status === 'pending' || 'paying'（paying 来自上一次未完成的 CAS）
 
-  // 2) CAS 抢锁：pending → paying。一次只允许一个请求进入事务。
+  // 1) CAS 抢锁：pending → paying。一次只允许一个请求进入事务。
   //    注意：这里不用事务——CAS 失败就退出，避免在事务内白白消耗连接。
+  //    C13 #5：用 CAS 返回的 claimed 文档做所有权检查，省掉一次专用预读
+  //    （原 flow 是 findById+select('userId status')→lean 先验所有权，再 findOneAndUpdate，
+  //    两轮 roundtrip；现在合并为一轮 CAS——filter 已隐式确认订单存在，claimed 带回 userId/status）。
   const claimed = await Order.findOneAndUpdate(
     { _id: orderId, status: 'pending' },
     { $set: { status: 'paying' } },
     { new: true }
   );
   if (!claimed) {
-    // 抢锁失败：要么是并发请求已经置为 paying（另一笔在跑），要么状态异常。
+    // 抢锁失败：要么订单不存在，要么状态不是 pending。
+    // 用一次 fallback 读确定当前状态：
+    //  - paid → 幂等返回当前订单（200，前端可安全重试）
+    //  - paying → 另一笔支付在跑（409）
+    //  - cancelled / expired / 其他 → 拒绝
     const current = await Order.findById(orderId).lean();
     if (current?.status === 'paid') return current as IOrder;
     if (current?.status === 'paying') {
@@ -177,11 +170,27 @@ export async function payOrder(orderId: string, actor: OrderActor) {
         409
       );
     }
+    if (!current) throw new AppError('NOT_FOUND', 'Order not found', 404);
+    if (current.status === 'cancelled') {
+      throw new AppError('ORDER_CANCELLED', 'Order has been cancelled', 422);
+    }
     throw new AppError(
       'INVALID_STATUS',
-      `Cannot pay order in status ${current?.status ?? 'unknown'}`,
+      `Cannot pay order in status ${current.status}`,
       422
     );
+  }
+
+  // claimed 是 CAS 抢锁后的最新文档，含 userId / status='paying'。
+  // 所有权校验在此：非特权角色必须匹配 actor.userId。
+  if (!isPrivileged && String(claimed.userId) !== String(actor.userId)) {
+    // CAS 已经把订单改成 'paying' 了——回退到 'pending'，让真正的主人能继续支付。
+    // 用 C13 #3 的 aggregation pipeline 写法避免双重 roundtrip 竞态。
+    await Order.updateOne(
+      { _id: orderId, status: 'paying' },
+      [{ $set: { status: 'pending' } }]
+    ).catch(() => undefined);
+    throw new AppError('FORBIDDEN', 'Not your order', 403);
   }
 
   // 3) 进入事务完成实际支付流程
