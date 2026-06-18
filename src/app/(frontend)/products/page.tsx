@@ -1,8 +1,9 @@
 import Link from 'next/link';
 import mongoose from 'mongoose';
 import { connectDB } from '@/lib/db';
-import { Product, Category } from '@/models';
+import { Product } from '@/models';
 import { escapeRegex } from '@/lib/utils/regex';
+import { listActiveCategoriesForUI } from '@/lib/services/CategoryService';
 
 export default async function ProductsPage({
   searchParams,
@@ -38,7 +39,7 @@ export default async function ProductsPage({
       .limit(pageSize)
       .lean(),
     Product.countDocuments(filter),
-    Category.find({ isActive: true }).lean(),
+    listActiveCategoriesForUI(),
   ]);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const activeCat = categories.find((c) => String(c._id) === searchParams.categoryId);
