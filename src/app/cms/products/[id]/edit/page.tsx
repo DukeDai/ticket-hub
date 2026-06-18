@@ -1,8 +1,9 @@
 import { notFound } from 'next/navigation';
 import mongoose from 'mongoose';
 import { connectDB } from '@/lib/db';
-import { Product, Category } from '@/models';
+import { Product } from '@/models';
 import { ProductForm, type CategoryOption } from '../../ProductForm';
+import { listActiveCategoriesForUI } from '@/lib/services/CategoryService';
 
 export default async function EditProductPage({ params }: { params: { id: string } }) {
   if (!mongoose.isValidObjectId(params.id)) notFound();
@@ -13,7 +14,7 @@ export default async function EditProductPage({ params }: { params: { id: string
         'title summary description images categoryId ticketType priceInCents originalPriceInCents stock purchaseLimit location refundable instantConfirm status'
       )
       .lean(),
-    Category.find({ isActive: true }).lean(),
+    listActiveCategoriesForUI(),
   ]);
   if (!product) notFound();
   const categories: CategoryOption[] = cats.map((c) => ({
