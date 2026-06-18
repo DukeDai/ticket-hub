@@ -333,14 +333,26 @@ export async function payOrder(orderId: string, actor: OrderActor) {
     // 边界：若 expiresAt 已过，不能退回 'pending'——TTL 索引 (partialFilterExpression: {status:'pending'})
     // 会立刻把过期 pending 订单清掉，用户看到订单莫名其妙消失。
     // 此时改为 'cancelled'，保留审计，前端可明确提示"订单已过期"。
+    //
+    // C13 #3：原先两次 Order.updateOne 是非原子的——若 expiresAt 在两次 roundtrip 之间被越过，
+    // 第一次 update 仍命中 'paying+expiresAt>now' → 置 pending，第二次 update 不再命中 'paying'
+    // （已被第一次改成 pending）→ silent no-op，TTL 立刻清掉订单，用户看到"订单莫名其妙消失"。
+    // 修法：用 aggregation pipeline update 单次原子操作，按 expiresAt 是否过期决定回退到 pending 还是 cancelled。
     const now = new Date();
     await Order.updateOne(
-      { _id: orderId, status: 'paying', expiresAt: { $gt: now } },
-      { $set: { status: 'pending' } }
-    ).catch(() => undefined);
-    await Order.updateOne(
-      { _id: orderId, status: 'paying', expiresAt: { $lte: now } },
-      { $set: { status: 'cancelled', cancelledAt: now } }
+      { _id: orderId, status: 'paying' },
+      [
+        {
+          $set: {
+            status: {
+              $cond: [{ $gt: ['$expiresAt', now] }, 'pending', 'cancelled'],
+            },
+            cancelledAt: {
+              $cond: [{ $lte: ['$expiresAt', now] }, now, '$cancelledAt'],
+            },
+          },
+        },
+      ]
     ).catch(() => undefined);
     throw err;
   } finally {
