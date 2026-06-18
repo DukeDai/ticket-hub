@@ -149,11 +149,17 @@ export async function addCartItem(
 
   // Step 2: 未命中 → $push 新行。upsert 保证购物车不存在时自动创建。
   // 同样用 findOneAndUpdate 拿回最新文档（含新行的 _id）。
-  // 边界：两个并发请求都到 Step 1 都未命中，都到 Step 2 → 都会 push 一行。
-  // 这种情况的防御是：把"唯一约束"用 $addToSet 的判定来近似，或者保持单步重试。
-  // 在本场景下，并发 add 通常是同一用户在同一毫秒内多次点击——accept 这个边角，
-  // 让用户在下单前 checkout 阶段的 cart.items 合并逻辑去重；如要严格，可加一个
-  // "X-Idempotency-Key" header 透传到 service 做请求级去重（v1 任务）。
+  //
+  // 已知竞态：两个并发请求都过 Step 1 的 $elemMatch 都未命中，
+  // 都会执行 Step 2 的 $push → cart.items 中会产生两个相同 productId 的行。
+  // 这是本实现的故意权衡：$addToSet 会因 productId 相等而静默丢行
+  // （与"增量 +N"语义不符），单步重试又会引入 ABA 与重试风暴。
+  //
+  // 兜底不在 checkout 阶段合并去重，而在下单校验：OrderService.quoteOrder
+  // 通过 CreateOrderSchema.superRefine 检查 items 中是否存在重复 productId，
+  // 命中则返回 "Duplicate productId in items list — please merge quantities"。
+  // 因此竞态结果 = 下单失败（422），用户必须刷新购物车（看到两个相同项）
+  // 后自行合并或删重再重试。如要根除，需引入请求级幂等键（v1 任务）。
   const pushCart = await Cart.findOneAndUpdate(
     { userId: userObjId },
     {
