@@ -143,12 +143,13 @@ describe('pagination', () => {
       });
     });
 
-    it('q with regex special chars passes through (potential ReDoS)', () => {
-      // Documents the unescaped behavior — production should escape.
+    it('q with regex special chars is escaped (prevents ReDoS / full-scan)', () => {
+      // C13 audit #2: Cycle 7 only fixed frontend/products/page.tsx; pagination.ts + cms
+      // were missed. Helper now lives in lib/utils/regex.ts and is applied here.
       const r = buildPagination({ page: 1, pageSize: 20, q: '.*' });
       expect((r.filter as Record<string, unknown>).$or).toEqual([
-        { title: { $regex: '.*', $options: 'i' } },
-        { summary: { $regex: '.*', $options: 'i' } },
+        { title: { $regex: '\\.\\*', $options: 'i' } },
+        { summary: { $regex: '\\.\\*', $options: 'i' } },
       ]);
     });
 

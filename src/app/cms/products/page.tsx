@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { connectDB } from '@/lib/db';
 import { Product, Category } from '@/models';
 import { Button } from '@/components/ui/Button';
+import { escapeRegex } from '@/lib/utils/regex';
 
 export default async function CmsProductsPage({
   searchParams,
@@ -13,7 +14,7 @@ export default async function CmsProductsPage({
   const pageSize = 20;
   const filter: Record<string, unknown> = {};
   if (searchParams.status) filter.status = searchParams.status;
-  if (searchParams.q) filter.title = { $regex: searchParams.q, $options: 'i' };
+  if (searchParams.q) filter.title = { $regex: escapeRegex(searchParams.q), $options: 'i' };
 
   const [items, total, categories] = await Promise.all([
     Product.find(filter)

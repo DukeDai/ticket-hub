@@ -1,4 +1,5 @@
 import type { FilterQuery } from 'mongoose';
+import { escapeRegex } from './regex';
 
 /**
  * 分页与查询参数转换。
@@ -59,11 +60,12 @@ export function buildPagination<T>({
 }: PaginationInput): BuiltPagination<T> {
   const skip = (page - 1) * pageSize;
   const filter: FilterQuery<T> = { ...(extraFilter as FilterQuery<T>) };
-  // 关键字搜索
+  // 关键字搜索（必须 escape，避免 q='.*' 触发全表扫描/ ReDoS）
   if (q) {
+    const safe = escapeRegex(q);
     (filter as Record<string, unknown>).$or = [
-      { title: { $regex: q, $options: 'i' } },
-      { summary: { $regex: q, $options: 'i' } },
+      { title: { $regex: safe, $options: 'i' } },
+      { summary: { $regex: safe, $options: 'i' } },
     ];
   }
   return {

@@ -2,14 +2,7 @@ import Link from 'next/link';
 import mongoose from 'mongoose';
 import { connectDB } from '@/lib/db';
 import { Product, Category } from '@/models';
-
-/**
- * 把字符串搜索词转义为安全的 regex 源串——避免 `?q=.*`、`?q=.\+` 这类 metachar 把查询放大成全表扫描。
- * 仅做"用户字面量匹配"，不做 wildcard 展开；想要 wildcard 走 text index 路线（v1 任务）。
- */
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+import { escapeRegex } from '@/lib/utils/regex';
 
 export default async function ProductsPage({
   searchParams,
