@@ -32,6 +32,7 @@ export const POST = withValidation(
       sub: String(user._id),
       role: user.role,
       email: user.email,
+      name: user.name,
     });
     const res = NextResponse.json({
       user: {
