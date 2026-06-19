@@ -1,8 +1,9 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { connectDB } from '@/lib/db';
 import { User } from '@/models';
 import { getCurrentUser } from '@/lib/auth/session';
 import { withError } from '@/lib/middleware/withError';
+import { rateLimit } from '@/lib/middleware/rateLimit';
 
 /**
  * 返回当前登录用户的信息。未登录返回 200 + { user: null }，
@@ -10,8 +11,16 @@ import { withError } from '@/lib/middleware/withError';
  *
  * 不返回 phone：phone 是 PII，且叠加 middleware Cache-Control 设置不当时会被 CDN 跨用户泄漏。
  * 需要更新手机号时另开 PATCH /api/auth/me/phone 或类似端点。
+ *
+ * C22 #13：endpoint 设置 Cache-Control: private,no-store，每次请求都走 jwtVerify + DB findById。
+ * 240/min per IP（4 req/s 均值 + 240 突发）：既覆盖正常前端轮询（页面打开、focus 触发、SWR 重试），
+ * 又挡住用脚本刷这个端点制造 event-loop 饱和的攻击。
+ * 必须在 getCurrentUser 之前调，否则 attacker 用无效 cookie 仍能打穿限流。
  */
-export const GET = withError(async () => {
+const limiter = rateLimit({ windowMs: 60_000, max: 240 });
+
+export const GET = withError(async (req: NextRequest) => {
+  limiter(req);
   const token = await getCurrentUser();
   if (!token) return NextResponse.json({ user: null });
   await connectDB();
