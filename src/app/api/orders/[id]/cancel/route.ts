@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { withAuth } from '@/lib/middleware/withAuth';
-import { rateLimit } from '@/lib/middleware/rateLimit';
+import { rateLimit, hashKeyPart } from '@/lib/middleware/rateLimit';
 import { AppError } from '@/lib/middleware/withError';
 import mongoose from 'mongoose';
 import { cancelOrder } from '@/lib/services/OrderService';
@@ -18,8 +18,8 @@ const cancelLimiter = rateLimit({
   windowMs: 60_000,
   max: 60,
   key: (req: NextRequest) => {
-    const uid = req.cookies.get('tk_session')?.value ?? 'anon';
-    return `orders:cancel:${uid}`;
+    const cookie = req.cookies.get('tk_session')?.value ?? 'anon';
+    return `orders:cancel:${hashKeyPart(cookie)}`;
   },
 });
 

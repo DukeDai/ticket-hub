@@ -1,5 +1,7 @@
 import type { NextRequest } from 'next/server';
+import { createHash } from 'crypto';
 import { AppError } from './withError';
+import { getClientIp } from '@/lib/utils/clientIp';
 
 /**
  * 简易内存版限流。
@@ -26,35 +28,15 @@ const buckets: Map<string, Bucket> = g.__rateLimitBuckets ?? (g.__rateLimitBucke
 /**
  * 提取客户端真实 IP。
  *
- * 安全：
- *  - X-Forwarded-For **可被客户端伪造**——绝对不能无条件信任。
- *  - 仅当 TRUST_PROXY=1 时才把 XFF 纳入计算；否则使用 Next.js 推断的 IP 或 'unknown'。
- *  - 部署在反代后请在反代层（nginx/vercel）配置：
- *    nginx: `proxy_set_header X-Real-IP $remote_addr;` 并 `set_real_ip_from <proxy_ip>;`
- *    vercel: 自动注入 `x-vercel-forwarded-for`，Next.js 已解析到 `request.ip`。
+ * 委托给 `@/lib/utils/clientIp`（C20 #9 统一实现）。
  *
- * 失败模式（DoS 防御）：
- *  - 一律返回 'unknown' 会让所有匿名请求共享同一个桶——任意客户端可触发全员 429。
- *  - 因此返回 null：调用方用 path + UA 前缀做兜底分桶，既避免跨路径污染，
- *    也限制单一 UA 的爆炸半径（攻击者需要伪造多样化的 UA 才能放大影响）。
+ * 旧实现的语义保留：
+ *  - 拿不到 IP 时返回 `'unknown'`，调用方在 buildBucketKey 中用 path + UA 前缀
+ *    兜底分桶，避免所有匿名请求共享单桶形成 DoS 放大器。
  */
-function getClientIp(req: NextRequest): string | null {
-  const trustProxy = process.env.TRUST_PROXY === '1';
-  if (trustProxy) {
-    const xff = req.headers.get('x-forwarded-for');
-    if (xff) {
-      // XFF 可能是 "client, proxy1, proxy2"，最左才是真实客户端
-      const first = xff.split(',')[0]?.trim();
-      if (first) return first;
-    }
-    const realIp = req.headers.get('x-real-ip');
-    if (realIp) return realIp.trim();
-  }
-  // Next.js 14+ 在 Vercel/反代环境下填充了 ip
-  // (NextRequest.ip 是非标准字段，部分环境会存在)
-  const reqWithIp = req as NextRequest & { ip?: string };
-  if (reqWithIp.ip) return reqWithIp.ip;
-  return null;
+function extractIp(req: NextRequest): string | null {
+  const ip = getClientIp(req);
+  return ip === 'unknown' ? null : ip;
 }
 
 /**
@@ -73,6 +55,20 @@ function buildBucketKey(req: NextRequest, ip: string | null): string {
   return `${path}:ua:${ua}`;
 }
 
+/**
+ * 哈希一段敏感值（cookie、token 等）以构造限流 key（C20 #10）。
+ *
+ * 原因：限流 key 出现在日志、错误信息、可能的 metrics 中。
+ * 原始 JWT/session cookie 是 200+ 字符的 base64，且包含签名信息——直接拼 key
+ * 等于把凭证暴露到 log pipeline。
+ *
+ * 实现：SHA-256 → 截前 16 hex 字符（64 bit）。碰撞概率 1/2^64，
+ * 对单实例 1 分钟窗口的限流场景可忽略。
+ */
+export function hashKeyPart(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
 export interface RateLimitOpts {
   /** 时间窗口 ms */
   windowMs: number;
@@ -84,7 +80,7 @@ export interface RateLimitOpts {
 
 export function rateLimit(opts: RateLimitOpts) {
   return function check(req: NextRequest): void {
-    const ip = getClientIp(req);
+    const ip = extractIp(req);
     const key =
       opts.key?.(req) ?? buildBucketKey(req, ip);
     const now = Date.now();
@@ -107,9 +103,19 @@ export function rateLimit(opts: RateLimitOpts) {
 
 /**
  * 周期性清理过期桶，避免内存泄漏。
+ *
+ * HMR 守卫（c20-1）：dev 下 HMR 重载会再次执行本模块顶层代码。
+ * 旧 buckets Map 通过 globalThis 已经是单例，但 setInterval 每次 import 都会新建
+ * 一个 handle，叠加多次后 unref() 也不一定能立刻让 Node 退出。
+ * 把 handle 也缓存到 globalThis 上，已存在则跳过，保证 dev 下只有一个 sweeper 在跑。
+ *
+ * 镜像 src/lib/cache.ts 的实现。
  */
 declare const setInterval: (cb: () => void, ms: number) => { unref?: () => void };
-if (typeof setInterval !== 'undefined') {
+const sweepG = globalThis as unknown as {
+  __rateLimitSweeper?: { unref?: () => void };
+};
+if (!sweepG.__rateLimitSweeper && typeof setInterval !== 'undefined') {
   const handle = setInterval(() => {
     const now = Date.now();
     for (const [k, b] of buckets) {
@@ -117,4 +123,5 @@ if (typeof setInterval !== 'undefined') {
     }
   }, 60_000);
   handle.unref?.();
+  sweepG.__rateLimitSweeper = handle as { unref?: () => void };
 }

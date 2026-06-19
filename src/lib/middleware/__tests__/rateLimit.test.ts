@@ -12,9 +12,15 @@ describe('rateLimit', () => {
 
   beforeEach(async () => {
     vi.useFakeTimers();
-    // C14: HMR 守卫让 buckets 通过 globalThis 跨模块重载存活，测试间必须显式清空。
-    const g = globalThis as unknown as { __rateLimitBuckets?: Map<string, unknown> };
+    // C14 + c20-1: HMR 守卫让 buckets 和 sweeper handle 通过 globalThis 跨模块重载存活，
+    // 测试间必须显式清空两者，否则 c20-1 的 sweeper 守卫会让"re-import 触发 setInterval"
+    // 这类断言假阴性。
+    const g = globalThis as unknown as {
+      __rateLimitBuckets?: Map<string, unknown>;
+      __rateLimitSweeper?: { unref?: () => void };
+    };
     g.__rateLimitBuckets?.clear();
+    g.__rateLimitSweeper = undefined;
     vi.resetModules();
     const mod = await import('../rateLimit');
     rateLimit = mod.rateLimit;
@@ -353,6 +359,10 @@ describe('rateLimit', () => {
       // Set the spy BEFORE the module's side-effect runs.
       // Note: this test can't be combined with vi.resetModules in beforeEach
       // because beforeEach runs first. We must re-import here to trigger the side effect.
+      // c20-1: 也要清掉 c20-1 的 sweeper 守卫，否则 beforeEach 触发的 import 会把
+      // __rateLimitSweeper 写回 globalThis，本测试的 re-import 不会再次走 setInterval 分支。
+      const sweepG = globalThis as unknown as { __rateLimitSweeper?: unknown };
+      sweepG.__rateLimitSweeper = undefined;
       const unrefFn = vi.fn();
       const spy = vi.spyOn(global, 'setInterval').mockReturnValue({ unref: unrefFn } as any);
       vi.resetModules();
