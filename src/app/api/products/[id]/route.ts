@@ -23,7 +23,20 @@ export const GET = withValidation({}, async ({ req }) => {
     throw new AppError('INVALID_ID', 'Invalid product id', 400);
   }
   await connectDB();
-  const product = await getProductById(id);
+  // 仅在 TRUST_PROXY=1 时信任 XFF；否则用 req.ip / null（与 rateLimit.ts 语义一致）。
+  const trustProxy = process.env.TRUST_PROXY === '1';
+  let ip: string | null = null;
+  if (trustProxy) {
+    const xff = req.headers.get('x-forwarded-for');
+    if (xff) ip = xff.split(',')[0]?.trim() ?? null;
+    if (!ip) ip = req.headers.get('x-real-ip')?.trim() ?? null;
+  }
+  if (!ip) ip = (req as NextRequest & { ip?: string }).ip ?? null;
+  const product = await getProductById(id, {
+    ip,
+    select:
+      'title slug summary description images priceInCents originalPriceInCents stock sold salesCount status ticketType location categoryId validFrom validTo validDaysAfterPurchase refundable instantConfirm purchaseLimit',
+  });
   if (!product) throw new AppError('NOT_FOUND', 'Product not found', 404);
   // 公开访问：未登录用户只看 active 商品；staff/admin 可看 draft/offline
   const user = (req as AuthedReq).user;

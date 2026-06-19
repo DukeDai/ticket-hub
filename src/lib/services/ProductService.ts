@@ -15,6 +15,60 @@ import type {
  * 读操作允许由 server component / route handler 直接用 mongoose，但写操作统一走 Service 以便复用事务/审计。
  */
 
+/**
+ * viewCount 写入节流（C15 修复）。
+ *
+ * 设计要点：
+ *  - 按 (ip, productId) 维度限频：同一 IP 对同一商品 60s 内只 $inc 一次。
+ *  - 全局内存 Map，HMR 通过 globalThis 单例守卫（与 rateLimit.ts / cache.ts 一致）。
+ *  - setInterval 每 60s sweep 一次过期键，防止内存泄漏；unref() 避免拖累 Node 优雅退出。
+ *  - 命中节流（lastSeen 在窗口内）直接跳过 $inc，不再发起 Mongo 写。
+ *
+ * DoS 缓解：
+ *  - 修复前：每次 getProductById 都 $inc，爬虫/突发流量可放大 viewCount 写热点。
+ *  - 修复后：单 IP 对单商品 1/min 上限，爆炸半径受限于 IP × 商品组合。
+ *  - IP 解析复用 rateLimit.getClientIp 的语义：trusted proxy 才看 XFF，避免伪造。
+ */
+const VIEW_THROTTLE_MS = 60_000;
+
+interface ViewSeen {
+  lastSeenAt: number;
+}
+
+const g = globalThis as unknown as {
+  __productViewThrottle?: Map<string, ViewSeen>;
+  __productViewThrottleSweeper?: { unref?: () => void };
+};
+
+const viewThrottle: Map<string, ViewSeen> =
+  g.__productViewThrottle ?? (g.__productViewThrottle = new Map());
+
+/**
+ * 60s 节流窗口内的重复 $inc 直接跳过。
+ * 返回 true 表示本次应执行 $inc；false 表示命中节流。
+ */
+function shouldBumpView(ip: string | null, productId: string): boolean {
+  const now = Date.now();
+  const key = ip ? `${ip}|${productId}` : `unknown|${productId}`;
+  const seen = viewThrottle.get(key);
+  if (seen && now - seen.lastSeenAt < VIEW_THROTTLE_MS) {
+    return false;
+  }
+  viewThrottle.set(key, { lastSeenAt: now });
+  return true;
+}
+
+// 周期性清理过期键（仿 rateLimit.ts / cache.ts 的 sweep 模式）。
+if (!g.__productViewThrottle && typeof setInterval !== 'undefined') {
+  const handle = setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of viewThrottle) {
+      if (now - v.lastSeenAt >= VIEW_THROTTLE_MS) viewThrottle.delete(k);
+    }
+  }, 60_000);
+  handle.unref?.();
+}
+
 function slugify(s: string): string {
   return (
     s
@@ -132,17 +186,22 @@ export async function listProducts(query: ListProductQuery) {
   return { items, total };
 }
 
-export async function getProductById(id: string): Promise<{
+export async function getProductById(
+  id: string,
+  opts?: { ip?: string | null; select?: string }
+): Promise<{
   _id: Types.ObjectId;
   [k: string]: unknown;
 } | null> {
   await connectDB();
   if (!mongoose.isValidObjectId(id)) return null;
-  const p = await Product.findById(id)
-    .populate('categoryId', 'name slug ticketType')
-    .lean();
+  const q = Product.findById(id);
+  if (opts?.select) q.select(opts.select);
+  const p = await q.populate('categoryId', 'name slug ticketType').lean();
   if (!p) return null;
-  // 异步增加 viewCount，不阻塞响应
-  Product.updateOne({ _id: id }, { $inc: { viewCount: 1 } }).catch(() => undefined);
+  // 异步增加 viewCount，不阻塞响应；按 IP+productId 1/min 节流（C15）。
+  if (shouldBumpView(opts?.ip ?? null, id)) {
+    Product.updateOne({ _id: id }, { $inc: { viewCount: 1 } }).catch(() => undefined);
+  }
   return p as unknown as { _id: Types.ObjectId; [k: string]: unknown };
 }
