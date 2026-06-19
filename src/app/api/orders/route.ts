@@ -50,7 +50,14 @@ export const GET = withAuth(
       extraFilter,
     });
     const [items, total] = await Promise.all([
-      Order.find(filter).sort(sort).skip(skip).limit(limit).lean(),
+      Order.find(filter)
+        .select(
+          'orderNo userId status totalAmountInCents createdAt items.productSnapshot.title'
+        )
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       Order.countDocuments(filter),
     ]);
     return NextResponse.json(pageResult(items, total, query.page, query.pageSize));
