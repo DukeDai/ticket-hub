@@ -1,10 +1,15 @@
 import { notFound } from 'next/navigation';
+import { headers } from 'next/headers';
 import { connectDB } from '@/lib/db';
 import { Product } from '@/models';
+import { shouldBumpView } from '@/lib/services/ProductService';
 import { AddToCartButton } from '@/components/product/AddToCartButton';
 
 export default async function ProductDetailPage({ params }: { params: { slug: string } }) {
   await connectDB();
+  // 保持原始的 findOne + populate + lean + select 形状（C18#2 修复）：
+  // 直接用 getProductById 会让 lean 类型塌成 [k: string]: unknown，导致下游字段全部变 unknown 并破坏 React 子节点类型（C19 复盘）。
+  // 节流逻辑独立抽取为 shouldBumpView，本页在主查询成功后单独调用，保持类型/职责清晰。
   const product = await Product.findOne({ slug: params.slug, status: 'active' })
     .select(
       'title slug summary description images priceInCents originalPriceInCents stock sold salesCount status ticketType location categoryId validFrom validTo validDaysAfterPurchase refundable instantConfirm purchaseLimit'
@@ -15,8 +20,13 @@ export default async function ProductDetailPage({ params }: { params: { slug: st
 
   const catName = (product.categoryId as unknown as { name?: string })?.name ?? '';
 
-  // 增加 viewCount（异步）
-  Product.updateOne({ _id: product._id }, { $inc: { viewCount: 1 } }).catch(() => undefined);
+  // 通过 shouldBumpView 节流增加 viewCount（C15/C17）：保持与 getProductById 完全相同的限频语义。
+  const h = headers();
+  const fwd = h.get('x-forwarded-for');
+  const ip = fwd ? fwd.split(',')[0]!.trim() : (h.get('x-real-ip') ?? null);
+  if (shouldBumpView(ip, String(product._id))) {
+    Product.updateOne({ _id: product._id }, { $inc: { viewCount: 1 } }).catch(() => undefined);
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
@@ -59,7 +69,7 @@ export default async function ProductDetailPage({ params }: { params: { slug: st
               </span>
               {product.originalPriceInCents && (
                 <span className="text-gray-400 line-through">
-                  ¥{(product.originalPriceInCents / 100).toFixed(2)}
+                  ¥{((product.originalPriceInCents as number) / 100).toFixed(2)}
                 </span>
               )}
             </div>

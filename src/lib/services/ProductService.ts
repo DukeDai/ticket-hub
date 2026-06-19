@@ -46,8 +46,11 @@ const viewThrottle: Map<string, ViewSeen> =
 /**
  * 60s 节流窗口内的重复 $inc 直接跳过。
  * 返回 true 表示本次应执行 $inc；false 表示命中节流。
+ *
+ * 导出供 slug 商品页等"非 getProductById 路径"复用（C18#2 重构）：
+ * 这些场景下调用方已自行完成主查询（保持 lean 类型），只需拿到节流决策后再独立发起 $inc。
  */
-function shouldBumpView(ip: string | null, productId: string): boolean {
+export function shouldBumpView(ip: string | null, productId: string): boolean {
   const now = Date.now();
   const key = ip ? `${ip}|${productId}` : `unknown|${productId}`;
   const seen = viewThrottle.get(key);
@@ -200,7 +203,7 @@ export async function getProductById(
   if (opts?.select) q.select(opts.select);
   const p = await q.populate('categoryId', 'name slug ticketType').lean();
   if (!p) return null;
-  // 异步增加 viewCount，不阻塞响应；按 IP+productId 1/min 节流（C15）。
+  // 通过 shouldBumpView 节流增加 viewCount（C15/C17）
   if (shouldBumpView(opts?.ip ?? null, id)) {
     Product.updateOne({ _id: id }, { $inc: { viewCount: 1 } }).catch(() => undefined);
   }
