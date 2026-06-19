@@ -84,9 +84,7 @@ export default async function CmsProductsPage({
           </thead>
           <tbody>
             {items.map((p) => {
-              const catName =
-                catMap.get(String((p.categoryId as unknown as { _id: string })._id ?? p.categoryId)) ??
-                '—';
+              const catName = catMap.get(String(p.categoryId)) ?? '—';
               return (
                 <tr key={String(p._id)} className="border-t border-gray-100">
                   <td className="px-4 py-3">
