@@ -24,22 +24,52 @@ export function expiresInSeconds(): number {
   return DEFAULT_TTL_SECONDS;
 }
 
+/**
+ * HS256 (HMAC-SHA-256) 所需的最小密钥字节数。
+ * 参考 RFC 2104：推荐密钥长度 ≥ 哈希输出长度（SHA-256 = 32 字节）。
+ * jose 在签名/校验时不会强制校验密钥强度，但弱密钥会显著降低签名的抗碰撞性。
+ */
+const MIN_SECRET_BYTES = 32;
+
+/**
+ * 开发/测试场景下的弱密钥逃生口。
+ * 显式置 1 才能放过 < 32 字节的密钥；生产环境应保持未设置。
+ */
+function isWeakSecretAllowed(): boolean {
+  return process.env.ALLOW_WEAK_JWT_SECRET === '1';
+}
+
 function getSecret(): Uint8Array {
   const raw = process.env.JWT_SECRET;
   if (!raw) {
     throw new Error('JWT_SECRET is not defined. Please set it in .env');
   }
   // 允许开发者直接填写普通字符串（默认即可）；如填写长度 ≥ 64 的字符串，认为是 base64。
+  let bytes: Uint8Array;
   if (raw.length >= 64) {
     try {
       const decoded = Buffer.from(raw, 'base64');
       // 只有 base64 真正生效（解码后长度仍 > 0）才使用解码结果
-      if (decoded.length > 0) return new Uint8Array(decoded);
+      if (decoded.length > 0) {
+        bytes = new Uint8Array(decoded);
+      } else {
+        bytes = new TextEncoder().encode(raw);
+      }
     } catch {
-      // fall through to raw bytes
+      bytes = new TextEncoder().encode(raw);
     }
+  } else {
+    bytes = new TextEncoder().encode(raw);
   }
-  return new TextEncoder().encode(raw);
+  // 强校验：HS256 至少需要 32 字节密钥（RFC 2104 推荐 ≥ 哈希输出长度）。
+  // 仅在显式启用 ALLOW_WEAK_JWT_SECRET=1 时放过（用于 dev/test fixture）。
+  if (bytes.length < MIN_SECRET_BYTES && !isWeakSecretAllowed()) {
+    throw new Error(
+      `JWT_SECRET is too short: got ${bytes.length} bytes, HS256 requires at least ${MIN_SECRET_BYTES} bytes (RFC 2104). ` +
+        `Generate a stronger secret, or set ALLOW_WEAK_JWT_SECRET=1 to override (dev/test only).`
+    );
+  }
+  return bytes;
 }
 
 export async function signAccessToken(

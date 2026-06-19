@@ -126,9 +126,12 @@ describe('jwt', () => {
     // 这些用例故意绕过类型系统, 构造缺字段的 token, 验证运行时守卫。
     // 关键点：必须用与 verifyAccessToken 调用 getSecret() 同样的字节手签。
     // 因此本块单独切换到 <64 字符的 SHORT_SECRET，走 raw 字节分支，签名才能匹配。
+    // SHORT_SECRET 长度 < 32 字节，会被 getSecret() 的 min-length 守卫拦截；
+    // 这里显式开启 ALLOW_WEAK_JWT_SECRET=1 作为 dev/test 逃生口。
     async function signWithMissing<K extends keyof AccessTokenPayload>(
       omit: K
     ): Promise<string> {
+      vi.stubEnv('ALLOW_WEAK_JWT_SECRET', '1');
       vi.stubEnv('JWT_SECRET', SHORT_SECRET);
       const payload: Record<string, unknown> = {
         sub: 'user-1',
@@ -171,6 +174,7 @@ describe('jwt', () => {
     it('accepts a raw secret shorter than 64 chars (signs + verifies)', async () => {
       const shortSecret = 'short-secret-32-chars-long-xxxxxxx';
       expect(shortSecret.length).toBeLessThan(64);
+      expect(shortSecret.length).toBeGreaterThanOrEqual(32);
       vi.stubEnv('JWT_SECRET', shortSecret);
 
       const token = await signAccessToken(makePayload());
@@ -184,6 +188,47 @@ describe('jwt', () => {
       // BASE64_SECRET 长度 >= 64, 且解码后长度 > 0, 应走 base64 解码分支。
       expect(BASE64_SECRET.length).toBeGreaterThanOrEqual(64);
       vi.stubEnv('JWT_SECRET', BASE64_SECRET);
+
+      const token = await signAccessToken(makePayload());
+      const decoded = await verifyAccessToken(token);
+
+      expect(decoded.sub).toBe('user-1');
+    });
+  });
+
+  describe('getSecret — HS256 min-length guard (RFC 2104)', () => {
+    it('throws when secret is shorter than 32 bytes', async () => {
+      const weakSecret = 'too-short-only-29-bytes!'; // 24 字节，远低于 32
+      vi.stubEnv('JWT_SECRET', weakSecret);
+      // 不设置 ALLOW_WEAK_JWT_SECRET，应被守卫拦截
+      await expect(signAccessToken(makePayload())).rejects.toThrow(
+        /JWT_SECRET is too short.*HS256 requires at least 32 bytes/
+      );
+    });
+
+    it('throws on verifyAccessToken when secret is shorter than 32 bytes', async () => {
+      const weakSecret = 'x'.repeat(20); // 20 字节
+      vi.stubEnv('JWT_SECRET', weakSecret);
+      await expect(verifyAccessToken('any.token.value')).rejects.toThrow(
+        /too short/
+      );
+    });
+
+    it('accepts a 32-byte secret as the minimum allowed length', async () => {
+      const minSecret = 'a'.repeat(32);
+      expect(minSecret.length).toBe(32);
+      vi.stubEnv('JWT_SECRET', minSecret);
+
+      const token = await signAccessToken(makePayload());
+      const decoded = await verifyAccessToken(token);
+
+      expect(decoded.sub).toBe('user-1');
+    });
+
+    it('allows weak secrets when ALLOW_WEAK_JWT_SECRET=1 is set', async () => {
+      const weakSecret = 'tiny'; // 4 字节
+      vi.stubEnv('JWT_SECRET', weakSecret);
+      vi.stubEnv('ALLOW_WEAK_JWT_SECRET', '1');
 
       const token = await signAccessToken(makePayload());
       const decoded = await verifyAccessToken(token);
