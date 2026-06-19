@@ -1372,3 +1372,42 @@ schema inspection 测试的是"编译期不变量"——enum 值变了忘改 Pro
 
 ### Next cycle
 - C17: Round 3 audit (3-lens). Likely to find: post-C15/C16 new issues + re-surfacing of C15 yellows.
+
+---
+
+## Cycle 17 · Apply C15/C16 v0 yellows (viewCount throttle + projections)
+
+**触发**: C16 收尾后,本轮关闭 C15/C16 backlog 中 5 个 v0-scope yellows: viewCount $inc DoS amplification throttle + 4 list/detail 端点的 .select() projection 修复。  
+**执行者**: ultracode Workflow (apply-only cycle, 3 parallel sub-agents)。  
+**状态**: ✅
+
+### Commits applied
+| Commit | 范围 | 来源 |
+| --- | --- | --- |
+| `3991111` | ProductService.getProductById viewCount throttle (per-IP, 1/min, HMR-safe Map) | C15 perf yellow (viewCount DoS amp) |
+| `9c453c7` | /api/orders list .select() projection | C15 perf yellow (PII in list) |
+| `5f0d8f0` | /api/vouchers list .select() projection | C15 perf yellow |
+| `ed586c3` | /api/products/[id] .select() projection | C15 perf yellow |
+| `e95ca21` | (frontend)/products/[slug] .select() projection | C15 perf yellow (SEO hot path) |
+
+### Verification
+- tsc: 0
+- lint: 0
+- vitest: 520+ passed
+- coverage: ~69% stmts (delta from C16: ±0 pp — pure refactor surface, no new branches)
+
+### Deferred (still v1.0 scope — out of v0 cycle reach)
+- IDOR pre-read on cancelOrder (needs merchantId scoping)
+- Session rotation (needs Redis revocation)
+- JWT_SECRET min-length (operational)
+- CMS requireAdmin defense-in-depth (low-priority, layout already gates)
+- CSRF cache downgrade (low risk)
+- OrderService simpleStock $expr race (needs mongodb-memory-server)
+- OrderService inner save dead code (cleanup)
+- CartService updateCartItem stale-read race (checkout mitigation sufficient)
+- CartService double-push race (v1: request idempotency)
+- middleware matcher too broad (low-priority)
+- rateLimit declare const setInterval TS hygiene (works in practice)
+
+### Next cycle
+- **C18**: Round 3 audit (3-lens) over post-C17 code. Likely to find new issues from the projection/throttle changes.
