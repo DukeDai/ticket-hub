@@ -122,6 +122,10 @@ const orderSchema = new Schema<IOrder>(
 
 orderSchema.index({ userId: 1, createdAt: -1 });
 orderSchema.index({ status: 1, expiresAt: 1 }); // 找超时未支付订单
+// C22 #6 性能加固：CMS 订单列表页按 status 过滤 + createdAt 倒序，
+// 走 Order.find({ status }).sort({ createdAt: -1 }).limit()。
+// 不加此索引会导致全表扫描 + 内存排序，订单量过千后 p95 退化明显。
+orderSchema.index({ status: 1, createdAt: -1 });
 // TTL：超时未支付的 pending 订单由 MongoDB 自动清理（不需要 cron）
 orderSchema.index(
   { expiresAt: 1 },
