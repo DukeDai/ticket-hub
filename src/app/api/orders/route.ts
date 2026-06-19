@@ -7,20 +7,46 @@ import { AppError } from '@/lib/middleware/withError';
 import { CreateOrderSchema, PaginationQuery } from '@/lib/validation/schemas';
 import { createOrder } from '@/lib/services/OrderService';
 import { buildPagination, pageResult } from '@/lib/utils/pagination';
-import { rateLimit } from '@/lib/middleware/rateLimit';
+import { rateLimit, hashKeyPart } from '@/lib/middleware/rateLimit';
 import type { AccessTokenPayload } from '@/lib/auth/jwt';
 import mongoose from 'mongoose';
 
 /**
- * GET  /api/orders  我的订单列表（admin 可查所有）
- * POST /api/orders  创建订单（限流 30/min）
+ * GET  /api/orders  我的订单列表（admin 可查所有）+ listLimiter 60/min per user
+ * POST /api/orders  创建订单（限流 30/min per user）
  *
  * HOF 链：withError → withAuth → withValidation。
+ *
+ * C22 #2（C21 把 limiter 移到 withValidation 之前但仍在 withAuth 之前）：
+ *   orderCreateLimiter 改用 cookie-hash per-user key，并放进 withAuth handler 内部。
+ *   匿名请求被 withAuth 先 401 拒绝，不消耗共享 IP 桶；NAT/CGNAT/办公网同一 IP 多用户
+ *   互踩问题彻底消除。
+ *
+ * C22 #9：GET 加 listLimiter 60/min per user —— 防已登录账号（哪怕 admin）用脚本
+ *   翻页全表 dump userId。key 用 cookie hash + path，align vouchers listLimiter 风格。
  */
-const orderCreateLimiter = rateLimit({ windowMs: 60_000, max: 30 });
+
+const orderCreateLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 30,
+  key: (req: NextRequest) => {
+    const cookie = req.cookies.get('tk_session')?.value ?? 'anon';
+    return `orders:create:${hashKeyPart(cookie)}`;
+  },
+});
+
+const listLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 60,
+  key: (req: NextRequest) => {
+    const cookie = req.cookies.get('tk_session')?.value ?? 'anon';
+    return `orders:list:${hashKeyPart(cookie)}:${new URL(req.url).pathname}`;
+  },
+});
 
 export const GET = withAuth(
   withValidation({ query: PaginationQuery }, async ({ query, req }) => {
+    listLimiter(req);
     await connectDB();
     const user = (req as NextRequest & { user?: AccessTokenPayload | null }).user!;
     // TODO(Cycle 6+): staff currently has admin-equivalent order search.
@@ -64,6 +90,16 @@ export const GET = withAuth(
   })
 );
 
+/**
+ * POST handler chain.
+ *
+ *   withAuth → withValidation → handler (内含 orderCreateLimiter)
+ *
+ * C22 #2：limiter 移进 withAuth handler 首行，per-user key。
+ *   - 匿名请求被 withAuth 先 401 拒绝，不消耗 IP 桶；
+ *   - 已登录用户按 session cookie 哈希独立分桶，IP 维度失效；
+ *   - bad-body 在 Zod parse 之前仍被 limiter 拦截（C20 #6 保持）。
+ */
 export const POST = withAuth(
   withValidation({ body: CreateOrderSchema }, async ({ body, req }) => {
     orderCreateLimiter(req);
