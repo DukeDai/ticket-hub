@@ -58,8 +58,8 @@ function shouldBumpView(ip: string | null, productId: string): boolean {
   return true;
 }
 
-// 周期性清理过期键（仿 rateLimit.ts / cache.ts 的 sweep 模式）。
-if (!g.__productViewThrottle && typeof setInterval !== 'undefined') {
+// 周期性清理过期键（仿 rateLimit.ts / cache.ts 的 sweep 模式，HMR 防双注册）。
+if (!g.__productViewThrottleSweeper && typeof setInterval !== 'undefined') {
   const handle = setInterval(() => {
     const now = Date.now();
     for (const [k, v] of viewThrottle) {
@@ -67,6 +67,7 @@ if (!g.__productViewThrottle && typeof setInterval !== 'undefined') {
     }
   }, 60_000);
   handle.unref?.();
+  g.__productViewThrottleSweeper = handle as unknown as { unref?: () => void };
 }
 
 function slugify(s: string): string {
