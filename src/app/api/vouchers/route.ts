@@ -46,7 +46,14 @@ export const GET = withValidation(
       extraFilter: extra,
     });
     const [items, total] = await Promise.all([
-      Voucher.find(filter).sort(sort).skip(skip).limit(limit).lean(),
+      Voucher.find(filter)
+        .select(
+          'code status expiresAt usedAt usedBy productTitle variantName visitDate createdAt'
+        )
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       Voucher.countDocuments(filter),
     ]);
     return NextResponse.json(pageResult(items, total, query.page, query.pageSize));
