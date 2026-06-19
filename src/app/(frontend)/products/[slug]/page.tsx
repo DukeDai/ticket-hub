@@ -6,6 +6,9 @@ import { AddToCartButton } from '@/components/product/AddToCartButton';
 export default async function ProductDetailPage({ params }: { params: { slug: string } }) {
   await connectDB();
   const product = await Product.findOne({ slug: params.slug, status: 'active' })
+    .select(
+      'title slug summary description images priceInCents originalPriceInCents stock sold salesCount status ticketType location categoryId validFrom validTo validDaysAfterPurchase refundable instantConfirm purchaseLimit'
+    )
     .populate('categoryId', 'name')
     .lean();
   if (!product) notFound();
