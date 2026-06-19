@@ -3,6 +3,7 @@ import { headers } from 'next/headers';
 import { connectDB } from '@/lib/db';
 import { Product } from '@/models';
 import { shouldBumpView } from '@/lib/services/ProductService';
+import { getClientIp } from '@/lib/utils/clientIp';
 import { AddToCartButton } from '@/components/product/AddToCartButton';
 
 export default async function ProductDetailPage({ params }: { params: { slug: string } }) {
@@ -21,10 +22,9 @@ export default async function ProductDetailPage({ params }: { params: { slug: st
   const catName = (product.categoryId as unknown as { name?: string })?.name ?? '';
 
   // 通过 shouldBumpView 节流增加 viewCount（C15/C17）：保持与 getProductById 完全相同的限频语义。
-  const h = headers();
-  const fwd = h.get('x-forwarded-for');
-  const ip = fwd ? fwd.split(',')[0]!.trim() : (h.get('x-real-ip') ?? null);
-  if (shouldBumpView(ip, String(product._id))) {
+  // IP 提取统一走 @/lib/utils/clientIp（C20 #9 phase 1），与 rateLimit/API route 共享同一份 TRUST_PROXY 语义。
+  const ip = getClientIp(headers());
+  if (shouldBumpView(ip === 'unknown' ? null : ip, String(product._id))) {
     Product.updateOne({ _id: product._id }, { $inc: { viewCount: 1 } }).catch(() => undefined);
   }
 
