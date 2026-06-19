@@ -143,7 +143,7 @@ export function variantStock(
       ),
     };
   }
-  if (v.stock < quantity) {
+  if (v.stock - (v.sold ?? 0) < quantity) {
     return {
       variant: v,
       ok: false,
