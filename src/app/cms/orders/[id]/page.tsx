@@ -6,9 +6,15 @@ import { Order, Voucher } from '@/models';
 export default async function CmsOrderDetailPage({ params }: { params: { id: string } }) {
   if (!mongoose.isValidObjectId(params.id)) notFound();
   await connectDB();
+  // C18#4: 投影限定字段，避免返回完整 Order（含 PII contact.phone 等）。
+  // C18#5: Voucher 仅需 code + status 字段；同订单票券量大时带宽节省显著。
   const [order, vouchers] = await Promise.all([
-    Order.findById(params.id).lean(),
-    Voucher.find({ orderId: params.id }).lean(),
+    Order.findById(params.id)
+      .select(
+        'orderNo userId status totalAmountInCents createdAt expiresAt paidAt cancelledAt refundedAt contact remark payment.provider payment.paidAt items'
+      )
+      .lean(),
+    Voucher.find({ orderId: params.id }).select('code status expiresAt usedAt').lean(),
   ]);
   if (!order) notFound();
 
