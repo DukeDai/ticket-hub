@@ -38,7 +38,13 @@ interface LeanProduct extends Omit<IProduct, 'skuVariants' | 'dailyInventory' | 
 }
 
 async function loadProducts(ids: string[]): Promise<Map<string, LeanProduct>> {
-  const docs = await Product.find({ _id: { $in: ids } }).lean<LeanProduct[]>();
+  // C24-01 (🔴): explicit projection — quoteOrder/payOrder only need fields
+  // for variant lookup, dailyInventory stock calc, voucherMeta attributes,
+  // and productSnapshot (title/cover/location). Avoid pulling the full
+  // document (description, attributes Mixed blob, full dailyInventory history).
+  const docs = await Product.find({ _id: { $in: ids } })
+    .select('title status images ticketType location skuVariants dailyInventory attributes validDaysAfterPurchase validTo')
+    .lean<LeanProduct[]>();
   return new Map(docs.map((d: LeanProduct) => [String(d._id), d]));
 }
 

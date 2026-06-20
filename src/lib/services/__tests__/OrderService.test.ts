@@ -277,6 +277,7 @@ describe('payOrder', () => {
     mocks.productUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
     // loadProducts: Product.find({_id:{$in:[productId]}}).lean<LeanProduct[]>()
     mocks.productFind.mockImplementation(() => ({
+      select: vi.fn().mockReturnThis(),
       lean: vi.fn().mockResolvedValue([
         {
           _id: { toString: () => PRODUCT_ID },
@@ -348,6 +349,7 @@ describe('payOrder', () => {
     // 库存 / voucher / cart 桩（仅第一个请求会走到事务内）
     mocks.productUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
     mocks.productFind.mockImplementation(() => ({
+      select: vi.fn().mockReturnThis(),
       lean: vi.fn().mockResolvedValue([
         {
           _id: { toString: () => PRODUCT_ID },
@@ -414,6 +416,7 @@ describe('payOrder', () => {
     mocks.productFind.mockImplementation(() => {
       callOrder.push('Product.find (loadProducts)');
       return {
+        select: vi.fn().mockReturnThis(),
         lean: vi.fn().mockResolvedValue([
           {
             _id: { toString: () => PRODUCT_ID },
