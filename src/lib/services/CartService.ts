@@ -276,7 +276,21 @@ export async function updateCartItem(
   if (!target) throw new AppError('ITEM_NOT_FOUND', 'Cart item not found', 404);
 
   // Step 2：库存前置校验（与 Cycle 7 行为一致：PATCH 时立即挡 OUT_OF_STOCK）
-  const product = (await Product.findById(target.productId).lean()) as IProduct | null;
+  // C25-03: 加 .select() 避免拉全 Product 文档（image array、description、
+  // attributes Mixed blob、dailyInventory 全量历史）。下游只读：
+  //   - status (active check)
+  //   - ticketType (getStrategy)
+  //   - skuVariants (variant 查找)
+  //   - dailyInventory / stock / sold (各 strategy.checkStock 需要的不同字段组合)
+  //   - title (OUT_OF_STOCK 错误消息)
+  // 未 select 字段（images、description、attributes、priceInCents、validTo
+  // 等）updateCartItem 完全用不到，浪费 wire payload。
+  const product = (await Product.findById(target.productId)
+    .select('title ticketType status skuVariants dailyInventory stock sold')
+    .lean()) as Pick<
+    IProduct,
+    'title' | 'ticketType' | 'status' | 'skuVariants' | 'dailyInventory' | 'stock' | 'sold'
+  > | null;
   if (!product) {
     throw new AppError('PRODUCT_NOT_FOUND', 'Product no longer exists', 404);
   }
@@ -304,7 +318,10 @@ export async function updateCartItem(
     const clamped = Math.min(99, quantity);
     const strategy = getStrategy(product.ticketType);
     const stock = strategy.checkStock({
-      product,
+      // cast: IProduct 含全字段，但本路径只 select 了策略会用到的子集；
+      // 策略代码（types.ts 的 simpleStock / dailyStock / variantStock）只读
+      // stock / sold / dailyInventory / skuVariants / title，全部包含在 Pick 内。
+      product: product as unknown as IProduct,
       variant,
       visitDate: target.visitDate ?? undefined,
       quantity: clamped,
