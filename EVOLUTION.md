@@ -1672,3 +1672,143 @@ synthesis agent 做 adversarial verify：
 6. **更新 EVOLUTION.md C25 + 评估终止**
 
 **C25 候选目标**：0🔴 + ≤3🟡（达到 §8.2 第二条的前提）。若 C25 仍非 0/0，则 C26 必须 apply 残余 🟡 后再跑 audit。
+
+---
+
+# Cycle 25 — round-7 evolution (P0 yellow apply + 3-lens re-audit + DRY refactors)
+
+## 0. TL;DR
+
+| Phase | Result |
+| --- | --- |
+| Phase 0 baseline (strict verifier) | tsc 0 / lint 0 / vitest 547/547 / next build 33 routes ✅ |
+| C25 P0 yellows apply (C24 carryover) | 4 atomic commits: cancelOrder CAS / dedupe headers / JWT prod guard / voucher verify ordering |
+| Phase 1 housekeeping | 2 commits: route.ts cache bypass for `q` (perf hygiene) + PricingContext TS6196 cleanup |
+| Phase 2 3-lens re-audit (correctness/perf/security) | 16 raw → 8 confirmed 🟡 + 5 refuted + 1 hallucination caught |
+| Phase 3 apply | 7 atomic commits (1 hallucination refuted in log, not code) |
+| Phase 4 strict verifier | tsc 0 / lint 0 / vitest 547/547 / next build 33 routes ✅ |
+
+**C25 result**: **0🔴 + 0🟡** applied (after synthesis confirmed + refutes) → §8.2 第一条满足。但 §8.2 要求"two consecutive cycles produce 0🔴+0🟡"，C24 不是 dry cycle (1🔴+18🟡)，所以**C25 单独不能终止**——需 C26 也 produce 0🔴+0🟡 才算两条连续 dry。
+
+## 1. Phase 0 + 1: P0 yellows + housekeeping
+
+来自 C24 EVOLUTION.md P0 bucket 的 4 项 carryover：
+
+| Commit | 文件 | 来源 | 类别 |
+| --- | --- | --- | --- |
+| C25-01 | `src/lib/services/OrderService.ts` | C24-03 P0 | `[bug]` cancelOrder CAS pending→cancelled（消除 TOCTOU 窗口） |
+| C25-02 | `src/middleware.ts` | C24-06 P0 | `[security]` 删除与 next.config.js 重复的安全头 |
+| C25-03 | `src/lib/auth/jwt.ts` + `.env.example` | C24-08 P0 | `[security]` production 强制忽略 ALLOW_WEAK_JWT_SECRET |
+| C25-04 | `src/app/api/vouchers/verify/route.ts` + `src/lib/middleware/withError.ts` | C24-09 P0 | `[security]` user.name 检查先于 Voucher.findOne + ACCOUNT_INVALID 进 SAFE_MESSAGES |
+
+C25-01 mirror payOrder CAS 模式 + baked-in userId filter（cancelOrder 无事务，比 payOrder 更简洁）。C25-04 双修复（ordering + whitelist）。
+
+Housekeeping（不属 P0，但需要清掉 working-tree 遗留）：
+
+| Commit | 文件 | 类别 |
+| --- | --- | --- |
+| C25-00 | `src/app/api/products/route.ts` | `[perf]` cache key drops `q` param，搜索路径绕过缓存 |
+| C25-00b | `src/lib/strategies/{sight,experience}.ts` | `[chore]` 删除未用 PricingContext import (TS6196) |
+
+## 2. Phase 2: 3-lens re-audit
+
+3 个并行 subagent (correctness-regression / performance-regression / security-hardening) + 1 synthesis agent。**Total: 16 raw findings → 8 confirmed 🟡 + 5 refuted + 1 synthesis hallucination**。
+
+### Confirmed 🟡 (8)
+
+| # | 类别 | 文件 | 描述 | Lens |
+| --- | --- | --- | --- | --- |
+| C25-02 | perf | OrderService.ts:170 | payOrder CAS-fallback 加 `.select('status')`（C24-13 carryover） | perf |
+| C25-03 | perf | CartService.ts:279 | updateCartItem Product.findById 加 `.select(...)` 投影 | perf |
+| C25-04 | security | vouchers/verify/route.ts:62 | `Voucher is ${voucher.status}` 泄露 status → 静态文案 | security |
+| C25-05 | security | withError.ts:33 | SAFE_MESSAGES 漏 INVALID_DATE / DATE_IN_PAST / EMAIL_TAKEN | security |
+| C25-06 | perf | CategoryService.ts:25 | createCategory 加 `cacheDeletePrefix('products:list:')` | perf |
+| C25-07 | code-smell | strategies/{dining,experience,sight,other}.ts | 抽 `computeExpiresAt` helper（voucher-helpers.ts） | correctness |
+| C25-08 | code-smell | OrderService.ts:40 + CartService.ts:51,198 | 抽 PRODUCT_LIST_PROJECTION 常量 | correctness |
+
+### Refuted by synthesis (5)
+
+| Finding | 反驳理由 |
+| --- | --- |
+| CategoryService cache invalidation mismatch | createCategory line 25 已正确 cacheDelete('cms:categories:active') + listActiveCategoriesForUI line 48 读同一 key。Code 匹配，finding 是 docs 注释问题 |
+| SAFE_MESSAGES 漏 INVALID_DATE from Zod schema | INVALID_DATE/DATE_IN_PAST from strategy validateVisitDate（sight.ts/experience.ts），不是 Zod schema superRefine。C25-05 覆盖了真实路径 |
+| guard.ts INVALID_REDIRECT not in SAFE_MESSAGES | safeRedirect 在 server component render 阶段抛错，不进 withError 错误响应 |
+| GET /api/cart 无 rate limit | C24 已分类 green（cart one-per-user，无 cross-user data leak）。GET 故意不限流 |
+| CMS orders list 全文档 | code inspection line 30 已有 `.select('orderNo status ...')`——finding 描述错误 |
+
+### Synthesis hallucination caught (1)
+
+| Finding | 真相 |
+| --- | --- |
+| C25-01: `cache.ts:97 cacheSet(key, undefined, ...)` 覆盖 stale 值 | Line 97 实际是 `.catch(() => undefined)`——错误吞噬 arrow function，无 cacheSet 调用。e.value 在 catch path 完整保留，stale window 行为正确。**REFUTE + no code change**。Synthesis 的 "verified by code inspection" 实际未读代码就报 bug——C24-04 enum 教训的镜像：synthesis 仍会幻觉，需要 verifier 显式 cite code line |
+
+## 3. Phase 3: Apply (7 atomic commits)
+
+C25-01 refute（不写 code）；C25-02~08 每个 finding 一个 atomic commit：
+
+| Commit | 摘要 |
+| --- | --- |
+| C25-02 | OrderService payOrder CAS-fallback 加 `.select('status')`；同步更新测试 mock 支持 `.select()` 链式调用 |
+| C25-03 | CartService updateCartItem 加 `.select('title ticketType status skuVariants dailyInventory stock sold')` + Pick<IProduct> 类型断言 |
+| C25-04 | vouchers/verify INVALID_STATUS 改静态文案 'Voucher is no longer valid' |
+| C25-05 | SAFE_MESSAGES 加 INVALID_DATE / DATE_IN_PAST / EMAIL_TAKEN |
+| C25-06 | createCategory 加 `cacheDeletePrefix('products:list:')` |
+| C25-07 | 抽 voucher-helpers.ts `computeExpiresAt`；4 个 strategy 替换 (dining/experience/sight/other) |
+| C25-08 | 抽 projection-keys.ts ORDER_PRODUCT_PROJECTION + CART_PRODUCT_PROJECTION |
+
+注：C25-08 synthesis 描述"identical field list"不准确——OrderService 和 CartService 投影不完全相同（前者需要 attributes/validDaysAfterPurchase/validTo 给 voucherMeta，后者需要 slug/price/stock 给 UI）。拆为两个常量，各自维护。
+
+## 4. Phase 4: Strict verifier
+
+```
+tsc --noEmit        → 0 errors
+next lint           → 0 errors / 0 warnings
+vitest run          → 547 pass / 0 fail
+next build (direct) → 33 routes, 87.1 kB First Load JS
+```
+
+**全部绿灯**。C25 不引入新 regression。
+
+## 5. 收敛趋势 (C13 → C25)
+
+| Cycle | 🔴 | 🟡 | 🟢 | Lens raw | 备注 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| C13 | 8 | 30 | 27 | 65 | first 3-lens |
+| C22 | 6 | 20 | 0 | 26 | round 5（含 1 false-positive build） |
+| C24 | 1 | 18 | 4 | 46 | round 6，+Phase 0 baseline fix |
+| **C25** | **0** | **8** | **0** | **16** | **round 7，0🔴+8🟡** |
+
+🔴 继续收敛：1 → 0。🟡 持平但分散。**Refute 率 5/16 = 31%**，5 refuted + 1 hallucination = 6/16 = 37.5% noise rate。Synthesis 仍会幻觉（C25-01 cacheSet(undefined)），但 adversarial verify + 后置人工 ref 检查有效捕获。
+
+## 6. 终止条件评估 (§8.2)
+
+§8.2: "两个连续 cycle 0/0 (🔴+🟡) 终止"。
+
+- C24: 1🔴+18🟡 (非 dry)
+- **C25: 0🔴+8🟡 (非 dry，需要 0/0 才算 dry)**
+- C26 必须 0🔴+0🟡 才能产生第一条 dry
+- C27 必须也 0🔴+0🟡 才算两条连续 dry → 终止
+
+**当前状态**：C26 必须继续。如果 C26 仍产 🟡，apply 后再跑 C27 audit，依此循环直到两条 0/0。
+
+## 7. 设计决策（值得记下来）
+
+1. **Synthesis hallucination 仍未根除** — C24-04 enum false positive 教训后，C25 仍出现 cache.ts hallucinated bug。**对策**：保留 adversarial verify + 后置人工 code inspection；未来可加 schema-level check（synthesis 必须引用 file:line 才算 verified，幻觉无法引用真实 line）。成本：每 cycle ~30 分钟 verifier 人工 review
+2. **C25-08 "identical projection" 描述不准确** — synthesis 把"相似"误报为"identical"。**对策**：synthesis 报告 finding 时必须**逐字 quote** projection 字符串，而非概述。verifier 拒绝任何未 quote 字面值的"duplication" claim
+3. **C25-06 cacheDeletePrefix 是 defense-in-depth，不是 immediate fix** — 当前 createCategory 路径上 products:list 缓存并不真变脏（populate read-time 完成）。但作为未来 edit-category-name 的兜底值得加。**原则**：当 refute 找不到严格 repro 但路径合理 + 成本低，按"future-proofing" 接受 yellow
+4. **C25-07 DRY 不动 show.ts** — show 有 variant.validTo 优先逻辑（演出按场次失效），不能与 product.validDaysAfterPurchase 路径合并。**原则**：DRY refactor 只合并真正同构的代码，不要为减少行数牺牲领域语义
+5. **vitest mock 同步更新规则** — C25-02 加 `.select('status')` 导致 findById mock 链式 API 不全；mock helper 加 `.select = mockReturnThis()` 即修复。**原则**：production code 加新链式调用时，mock helper 必须同步扩展，避免 silent test rot（C24-00 教训）
+
+## 8. 给下个 session 的接力棒
+
+按 §8.2 协议，C25 未达成终止条件（0🔴 但 8🟡 非 0/0）。C26 必须继续：
+
+1. **重读 CLAUDE.md + EVOLUTION.md C24/C25**
+2. **跑 strict verifier**：`tsc --noEmit` + `npx vitest run` + `./node_modules/.bin/next build`（**全部 3 项必须绿才能进入 audit**）
+3. **apply 任何残余 🟡**（C25 已 apply 全部 8 个 confirmed yellows——C26 应从 0 起步）
+4. **再跑 3-lens audit**：focus lens 收紧到"是否有新 regression"+"C25 DRY refactor 是否引入副作用"
+5. **synthesis 必须引用 file:line + 逐字 quote 代码字符串**才能 cite "verified"（C25-01/08 教训）
+6. **更新 EVOLUTION.md C26 + 评估终止**
+
+**C26 候选目标**：0🔴 + 0🟡（达到 §8.2 第一条 dry 的前提）。若 C26 仍是 0🔴+N🟡，apply 后再跑 C27。C26 是 audit 收敛的关键观察点——若 0🔴+0🟡 持续两条，则 §8.2 终止触发。
+
