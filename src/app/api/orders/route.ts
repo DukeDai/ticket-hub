@@ -55,8 +55,8 @@ export const GET = withAuth(
     // points at a product owned by that staff. Requires Product.merchantId / ownerId schema field.
     // For v0 we accept the over-broad read; v1 adds the scoping.
     const isAdmin = user.role === 'admin' || user.role === 'staff';
-    const url = new URL(req.url);
-    const userIdFilter = url.searchParams.get('userId');
+    // C31 perf: req.nextUrl 已是解析好的 URL，直接读 searchParams。
+    const userIdFilter = req.nextUrl.searchParams.get('userId');
     let ownerId = user.sub;
     if (isAdmin && userIdFilter && mongoose.isValidObjectId(userIdFilter)) {
       ownerId = userIdFilter;
@@ -67,7 +67,7 @@ export const GET = withAuth(
     const extraFilter: Record<string, unknown> = {
       userId: new mongoose.Types.ObjectId(ownerId),
     };
-    const status = url.searchParams.get('status');
+    const status = req.nextUrl.searchParams.get('status');
     if (status) extraFilter.status = status;
 
     const { skip, limit, filter, sort } = buildPagination({

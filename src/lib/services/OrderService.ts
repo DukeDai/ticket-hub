@@ -243,8 +243,16 @@ export async function payOrder(orderId: string, actor: OrderActor) {
       }
 
       // 1) 扣减库存（不同 product 互相独立，可并行；同 product 由 mongoose 事务序列化）
-      await Promise.all(
-        order.items.map(async (it) => {
+      // C31 perf: 原来无并发上限的 Promise.all，N = order.items.length。
+      // 大单（50+ 项）会同时打开 50 个 MongoDB session 连接。用 chunk 限制并发峰值。
+      const CHUNK_SIZE = 10;
+      const chunks = [];
+      for (let i = 0; i < order.items.length; i += CHUNK_SIZE) {
+        chunks.push(order.items.slice(i, i + CHUNK_SIZE));
+      }
+      for (const chunk of chunks) {
+        await Promise.all(
+          chunk.map(async (it) => {
           if (it.variantId) {
             const r = await Product.updateOne(
               {
@@ -294,6 +302,7 @@ export async function payOrder(orderId: string, actor: OrderActor) {
           }
         })
       );
+      }
 
       // 2) 订单置为 paid
       order.status = 'paid';

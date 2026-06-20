@@ -52,12 +52,12 @@ export const PATCH = withAuth(
 
 export const DELETE = withAuth(async (req, user) => {
   cartWriteLimiter(req);
-  const url = new URL(req.url);
-  if (url.searchParams.get('all') === 'true') {
+  // C31 perf: req.nextUrl 已是解析好的 URL，直接读 searchParams。
+  if (req.nextUrl.searchParams.get('all') === 'true') {
     await clearCart(user.sub);
     return NextResponse.json({ ok: true });
   }
-  const itemId = url.searchParams.get('itemId');
+  const itemId = req.nextUrl.searchParams.get('itemId');
   if (!itemId || !mongoose.isValidObjectId(itemId)) {
     throw new AppError('INVALID_ITEM_ID', 'itemId is required', 422);
   }

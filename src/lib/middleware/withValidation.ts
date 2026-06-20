@@ -63,9 +63,9 @@ export function withValidation<TBody extends ZodTypeAny | undefined, TQuery exte
       }
     }
 
-    const url = new URL(req.url);
+    // C31 perf: 直接用 req.nextUrl（已是解析好的 URL），省去 new URL() 分配。
     const queryObj: Record<string, string> = {};
-    url.searchParams.forEach((v, k) => {
+    req.nextUrl.searchParams.forEach((v, k) => {
       queryObj[k] = v;
     });
 
