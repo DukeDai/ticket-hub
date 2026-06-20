@@ -10,6 +10,10 @@ import mongoose from 'mongoose';
  * C9：rateLimit（60/min per user）。该端点带 userId+contact+items.productSnapshot 等 PII，
  * 已登录账号用脚本枚举订单 ID（虽然 ObjectId 难枚举）仍能 dump 全量。
  * 限流 60/min 给真实用户足够带宽（前端翻页 = 一次），挡住脚本化 dump。
+ *
+ * C28-01：路由 ID 改用 Next.js 14 的 `ctx.params.id`，对齐 pay route 的 C15 修复
+ * —— 旧 `pathname.split('/').pop()!` 是 TS 谎言（pop() 返回 string|undefined），
+ * 且与 pay route 兄弟端点不一致；前缀代理部署时会再次成为坑。
  */
 const orderGetLimiter = rateLimit({
   windowMs: 60_000,
@@ -20,9 +24,9 @@ const orderGetLimiter = rateLimit({
   },
 });
 
-export const GET = withAuth(async (req, user) => {
+export const GET = withAuth<[{ params: { id: string } }]>(async (req, user, ctx) => {
   orderGetLimiter(req);
-  const id = new URL(req.url).pathname.split('/').pop()!;
+  const { id } = ctx.params;
   if (!mongoose.isValidObjectId(id)) {
     throw new AppError('INVALID_ID', 'Invalid order id', 400);
   }

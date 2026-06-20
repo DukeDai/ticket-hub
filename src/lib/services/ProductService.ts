@@ -84,11 +84,14 @@ function slugify(s: string): string {
 }
 
 async function ensureUniqueSlug(base: string): Promise<string> {
-  // 上限 1000 次；超出后拼接时间戳+随机后缀兜底，避免被恶意同名拖入死循环。
-  for (let i = 0; i < 1000; i++) {
-    const candidate = i === 0 ? base : `${base}-${i}`;
-    const exists = await Product.exists({ slug: candidate });
-    if (!exists) return candidate;
+  // C28-03：原来 1000 次顺序 `Product.exists()` 单条查询，每次 CMS create 都可能拖到 1000 个 roundtrip。
+  // 改为一次性 $in 查所有候选 slug，本地选第一个不存在的；恶意同名仍受 1000 上限保护（不在名单里的后缀会落到时间戳兜底）。
+  const MAX_TRIES = 1000;
+  const candidates = Array.from({ length: MAX_TRIES }, (_, i) => (i === 0 ? base : `${base}-${i}`));
+  const existing = await Product.find({ slug: { $in: candidates } }, { slug: 1 }).lean();
+  const taken = new Set(existing.map((d) => d.slug));
+  for (const candidate of candidates) {
+    if (!taken.has(candidate)) return candidate;
   }
   return `${base}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

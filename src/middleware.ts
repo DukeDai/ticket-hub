@@ -27,6 +27,10 @@ const PUBLIC_CACHEABLE_GET_PATHS: RegExp[] = [
   /^\/api\/categories(?:\/[^/]+)?$/,      // /api/categories 与 /api/categories/[id]
 ];
 
+// C28-04：原来 `/api/products/[id]` 详情判定 regex 在 middleware 函数体内每请求重编译一次。
+// 提到模块顶层，只编译一次，热路径省下 per-request RegExp 实例化。
+const PRODUCT_DETAIL_RE = /\/api\/products\/[^/]+$/;
+
 /**
  * 'null' origin 是 sandboxed iframe / file:// / data: URI 注入的常见入口；
  * 永远不允许在 mutating 请求中出现，无论 ALLOWED_ORIGINS 怎么配。
@@ -101,7 +105,7 @@ export function middleware(req: NextRequest) {
         res.headers.set('Vary', 'Cookie');
         res.headers.set('Cache-Control', 'private, no-store');
       } else {
-        const isDetail = /\/api\/products\/[^/]+$/.test(req.nextUrl.pathname);
+        const isDetail = PRODUCT_DETAIL_RE.test(req.nextUrl.pathname);
         res.headers.set('Vary', 'Cookie');
         res.headers.set(
           'Cache-Control',
@@ -120,6 +124,10 @@ export function middleware(req: NextRequest) {
   return res;
 }
 
+// C28-05：原 matcher 包含 catch-all `/((?!_next/static|_next/image|favicon.ico).*)`，
+// 让 middleware 在每个 SSR 渲染里都跑一遍但只 `NextResponse.next()` 不做任何事——
+// CSRF/Cache-Control 都是 /api/-only，安全头由 next.config.js headers() 统一配置。
+// 缩到 `/api/:path*` 即可，省下每次页面渲染的 middleware 调度开销。
 export const config = {
-  matcher: ['/api/:path*', '/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/api/:path*'],
 };

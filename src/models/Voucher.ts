@@ -53,6 +53,10 @@ const voucherSchema = new Schema<IVoucher>(
 );
 
 voucherSchema.index({ status: 1, expiresAt: 1 });
+// C28-02: 钱包列表 /api/vouchers 用 `find({userId}).sort({createdAt:-1})`，
+// 旧 `{userId}` 单字段索引只能服务等值匹配，排序走 in-memory sort。
+// 加复合索引 `{userId:1, createdAt:-1}` 后 ESR 等值+排序都走索引。
+voucherSchema.index({ userId: 1, createdAt: -1 });
 
 voucherSchema.set('toJSON', {
   versionKey: false,

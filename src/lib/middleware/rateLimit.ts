@@ -49,7 +49,9 @@ function extractIp(req: NextRequest): string | null {
  *   需要变换 UA 才能放大爆炸半径。
  */
 function buildBucketKey(req: NextRequest, ip: string | null): string {
-  const path = new URL(req.url).pathname;
+  // C28-06：NextRequest 已经把 URL 解析好挂在 `nextUrl`，直接读 pathname 比 `new URL(req.url)` 再构造解析省一次分配；
+  // 每个 mutating 请求都会走这里，热点路径上少一个 URL parser 调用。
+  const path = req.nextUrl.pathname;
   if (ip) return `${ip}:${path}`;
   const ua = req.headers.get('user-agent')?.slice(0, 32) ?? 'no-ua';
   return `${path}:ua:${ua}`;
