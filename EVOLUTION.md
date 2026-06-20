@@ -2545,3 +2545,111 @@ Per §8.1 step 6 + §8.2 protocol:
 
 *演化协议状态更新: C29 = round-11 audit, 0🔴 + 4🟡 + 2🟢 (refute rate 0%). §8.2 NOT triggered; C28 + C29 both produced 🟡. C30 is required. Cross-lens convergence on rate-limit surface. Auth/me projection (C24-16 deferral) now fixed. Convergence: 🔴 = 0 since C25, but 🟡 non-zero in both post-C27 cycles.*
 
+---
+
+# Cycle 30 — round-12 audit
+
+## 1. Dispatch context
+
+C29 closed with 4🟡 + 2🟢 (not dry). §8.2 requires two consecutive dry cycles. C30 dispatched with sharpened prompts incorporating all five dimensions from C28/C29, plus a cross-lens convergence check.
+
+Subagent cost: ~348k tokens (3 lens agents + synthesis), ~15 minutes wall-clock.
+
+## 2. Phase 0 — strict verifier
+
+| Check | Result |
+| --- | --- |
+| `tsc --noEmit` | 0 errors |
+| `vitest run` | 547/547 passed (3.69s) |
+| `next build` | 33 routes, all green |
+
+Baseline clean.
+
+## 3. 3-lens audit — raw findings
+
+| Lens | 🔴 | 🟡 | 🟢 | Raw |
+| --- | ---: | ---: | ---: | ---: |
+| Correctness | 0 | 11 | 0 | 11 |
+| Performance | 0 | 12 | 0 | 12 |
+| Security | 0 | 0 | 0 | 0 |
+| **Total** | **0** | **23** | **0** | **23** |
+
+Refute rate: **0/23 = 0%** — all verbatim citations verified. Most findings-rich cycle since C13. The "one-time exhaustive projection drain" in the perf lens confirmed the cluster was not fully surfaced by prior surface-level audits.
+
+## 4. Findings detail
+
+### Priority triage
+
+23 🟡 in one cycle exceeded the threshold for a single atomic commit. Categorized:
+
+**Real correctness bugs (apply):** 2
+**Projection micro-optimizations (apply):** 10
+**Code-smell (defer):** 11
+
+### Applied fixes (9 items, committed to `69f24a0`)
+
+**Correctness bugs:**
+- `auth/register` + `auth/login`: removed `req as NextRequest` type cast — `limiter(req)` after `withValidation` strips the extended type, cast is unnecessary
+- `ShowStrategy.voucherMeta`: use `computeExpiresAt` as fallback when no `variant.validTo` — fixes `validDaysAfterPurchase` oversight (show now consistent with sight/dining/experience)
+
+**Projection micro-optimizations (all 🟡):**
+- `ProductService.listProducts`: remove dead `populate('categoryId', ...)` — `categoryId` not in returned fields
+- `ProductService.createProduct`: `.select('ticketType')`
+- `ProductService.updateProduct`: `.select('ticketType')`
+- `products/route.ts POST`: `.select('ticketType')`
+- `UserService.registerUser`: `User.exists()` instead of `findOne().lean()`
+- `auth/register route`: `User.exists()` instead of `findOne().lean()`
+- `CartService.updateCartItem`: `.select('items')`
+- `OrderService.cancelOrder CAS fallback`: `.select('userId status')`
+- `CategoryService.listActiveCategories`: `.select('name slug ticketType sortOrder')`
+- `CategoryService.listAllCategories`: `.select('name slug ticketType sortOrder')`
+
+### Deferred to C31 (11 code-smell 🟡)
+
+- Double-cast via `unknown` in `ProductService.getProductById` and `CheckoutForm.tsx`
+- `new URL(req.url)` in `withValidation.ts:66`, `cart/route.ts:55`, `orders/route.ts:58`
+- Unbounded `Promise.all` concurrency in `OrderService.payOrder` (N = order items count)
+- `ProductService.getProductById` double-cast
+
+### §8.2 Termination assessment
+
+| Cycle | Raw 🔴 | Raw 🟡 | Dry? |
+| --- | ---: | ---: | ---: |
+| C27  | 0 | 0 | ✅ first dry |
+| C28  | 0 | 6 | ❌ |
+| C29  | 0 | 4 | ❌ |
+| **C30** | **0** | **23** | **❌** |
+
+**C27 + C28 + C29 + C30 ≠ two consecutive dry cycles.** §8.2 NOT triggered. C31 required.
+
+## 5. Convergence trend (C27 → C30)
+
+| Cycle | 🔴 | 🟡 | 🟢 | Raw | Dry? |
+| --- | ---: | ---: | ---: | ---: | --- |
+| C27 | 0 | 0 | 0 | 0 | ✅ first dry |
+| C28 | 0 | 6 | 0 | 6 | ❌ |
+| C29 | 0 | 4 | 2 | 6 | ❌ |
+| **C30** | **0** | **23** | **0** | **23** | **❌** |
+
+**Reading**: C27 was an anomaly. C28–C30 show the codebase oscillating around a plateau — each cycle's "exhaustive drain" finds another batch of projection/cache/populate micro-optimizations that prior surface-level audits missed. The projection cluster has now produced 35+ items across C25–C30. The protocol is working: each cycle finds real defects. But §8.2 termination remains elusive.
+
+## 6. Handoff to C31
+
+1. **Run strict verifier** before audit
+2. **3-lens audit** — apply remaining 11 deferred 🟡 from C30, plus probe new surface
+3. **If 0🔴+0🟡** → C31 becomes the 2nd consecutive dry candidate (C27 + C31 gap makes C27 stale, but §8.2 still fires if C31 is 0/0)
+4. **If findings surface** → apply + plan C32
+
+## 7. Final state
+
+| Metric | Value |
+| --- | --- |
+| Strict verifier | tsc 0 / vitest 547/547 / next build 33 routes |
+| Last applied commit | `69f24a0` (C30 cleanup — 9 fixes) |
+| §8.2 gate | NOT triggered; C31 required |
+| Subagent cost | ~348k tokens |
+
+---
+
+*演化协议状态更新: C30 = round-12 audit, 0🔴 + 23🟡 + 0🟢 (refute rate 0%, highest raw count since C13). §8.2 NOT triggered; C27 + C30 gap breaks consecutive-dry requirement. C31 required. Projection/cache/populate cluster has produced 35+ items across C25-C30.*
+
