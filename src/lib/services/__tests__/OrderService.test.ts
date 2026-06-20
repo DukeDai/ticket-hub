@@ -1,5 +1,5 @@
 /**
- * OrderService 测试骨架（C14）。
+ * OrderService 测试骨架（C14, updated for C24 to match post-CAS / post-loadProducts-move contract）。
  *
  * 范围（v0 折中——见 EVOLUTION.md C12 Phase B3 决策）：
  *  - 只覆盖 payOrder 的三个关键场景：happy path、CAS 并发抢锁、loadProducts 调用顺序。
@@ -8,9 +8,18 @@
  *  - 不测 quoteOrder / cancelOrder（留给 C15 后续 coverage 扩张）。
  *
  * 设计目标：
- *  - 锁定 payOrder 的现状行为，作为 C15 #1 apply perf reds 的回归保护。
+ *  - 锁定 payOrder 的现状行为（C24：CAS 自带回 doc，无需独立预检；
+ *    loadProducts 已移到事务外），作为回归保护。
  *  - 用 vi.fn() 显式编排每个模型的返回值，让断言聚焦于"调用顺序 + 状态转换"。
  *  - 不依赖 mongoose.Schema / HydratedDocument 等真实类型——一律走 `as unknown as ...` 窄化。
+ *
+ * C24 同步更新（C13 #5/#6 reds 已在生产落地，测试未跟进）：
+ *  - 移除 `Order.findById(...).select('userId status').lean()` 预检断言
+ *    （CAS 自带 userId/status，无需预读）。
+ *  - `claimed` mock 必须包含 `items`（CAS 返回完整 order doc；
+ *    loadProducts 读取 claimed.items.map）。
+ *  - loadProducts 在事务外调用——断言从"在 Product.updateOne 之前"
+ *    改为"在事务 startSession 之前"。
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -182,18 +191,49 @@ function makeFakeSession() {
 
 /**
  * 设置 findById mock 的链式返回。
- * OrderService 用 `Order.findById(id).select(...).lean()` 和 `Order.findById(id).session(session)` 两种调用模式。
- * - leanValue：select(...).lean() 返回的值（用于预检所有权）
- * - sessionValue：.session(session) 返回的值（事务内真实 order doc）
+ * C24 更新：post-CAS 后只剩两种调用模式：
+ *  - `Order.findById(id).lean()` —— CAS 失败时的状态回查
+ *  - `Order.findById(id).session(session)` —— 事务内加载 order doc
+ * 无独立预检。
+ *
+ * 关键：每次调用都同时提供 .lean 和 .session 方法（值各自独立），不靠 callIdx 分派。
+ * 原因：race test 中两个并发请求，谁先调用 findById 是不确定的；
+ * 若 callIdx-based 分派（callIdx=0 → 只 .session；callIdx=1 → 只 .lean），
+ * CAS 成功的请求可能拿到只有 .lean 的 mock → .session 返回 undefined → NOT_FOUND。
+ * 让每次 findById 同时挂两个方法即可避免该竞争。
  */
 function setupFindById(leanValue: unknown, sessionValue: unknown) {
   mocks.orderFindById.mockImplementation(() => {
     const ret: Record<string, unknown> = {};
-    ret.select = vi.fn().mockReturnThis();
     ret.lean = vi.fn().mockResolvedValue(leanValue);
     ret.session = vi.fn().mockReturnValue(sessionValue);
     return ret;
   });
+}
+
+/** 构造 CAS 抢锁成功后的 claimed 文档（含 items，因为 loadProducts 读 claimed.items.map）。 */
+function makeClaimed(overrides: Record<string, unknown> = {}) {
+  return {
+    _id: { toString: () => ORDER_ID },
+    orderNo: '20260615143022ABCDEF',
+    userId: { toString: () => USER_ID },
+    items: [
+      {
+        productId: { toString: () => PRODUCT_ID },
+        productSnapshot: { title: '故宫门票', cover: '', ticketType: 'sight' },
+        variantId: null,
+        variantName: undefined,
+        visitDate: undefined,
+        quantity: 2,
+        unitPriceInCents: 6000,
+        subtotalInCents: 12000,
+      },
+    ],
+    totalAmountInCents: 12000,
+    status: 'paying',
+    expiresAt: null,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -222,19 +262,15 @@ beforeEach(() => {
 
 describe('payOrder', () => {
   it('happy path: order pending → paid, returns updated order', async () => {
-    const owner = {
-      userId: { toString: () => USER_ID },
-      status: 'pending',
-    };
     const orderDoc = makeOrderDoc({ status: 'paying' });
 
-    // Order.findById 链路：
-    //  1) .select('userId status').lean() → owner（预检）
-    //  2) .session(session) → orderDoc（事务内）
-    setupFindById(owner, orderDoc);
+    // C24：post-CAS 后只剩 1 次 findById —— 事务内加载。CAS 自带 userId/status。
+    // sessionValue=orderDoc（事务内）；leanValue 不走（pre-check 已删）。
+    setupFindById(null, orderDoc);
 
     // CAS: Order.findOneAndUpdate({_id, status:'pending'}) → 抢锁成功
-    const claimed = { ...owner, status: 'paying' };
+    // C24：claimed 是完整 order doc（含 items）—— loadProducts 读 claimed.items.map。
+    const claimed = makeClaimed();
     mocks.orderFindOneAndUpdate.mockResolvedValueOnce(claimed);
 
     // 库存扣减 Product.updateOne → matched + modified = 1
@@ -266,15 +302,16 @@ describe('payOrder', () => {
     expect((result as { status: string }).status).toBe('paid');
     expect((result as { payment: { provider: string } }).payment.provider).toBe('mock');
 
-    // 调用顺序断言：
-    //  1. Order.findById(...).select(...).lean() — 预检
-    //  2. Order.findOneAndUpdate({_id, status:'pending'}, {$set:{status:'paying'}})
-    //  3. Order.findById(orderId).session(session) — 事务内
-    //  4. Product.updateOne × N items
-    //  5. Product.find(...) (loadProducts inside transaction)
-    //  6. Voucher.insertMany(...)
-    //  7. Cart.updateOne(...)
-    expect(mocks.orderFindById).toHaveBeenCalledTimes(2);
+    // 调用顺序断言（C24 contract）：
+    //  1. Order.findOneAndUpdate({_id, status:'pending'}, {$set:{status:'paying'}}) —— CAS
+    //  2. loadProducts(claimed.items.map) —— **事务外** pre-fetch (C13 #6)
+    //  3. mongoose.startSession
+    //  4. Order.findById(orderId).session(session) —— 事务内（仅 1 次，无预检）
+    //  5. Product.updateOne × N items
+    //  6. order.save({session})
+    //  7. Voucher.insertMany(...)
+    //  8. Cart.updateOne(...)
+    expect(mocks.orderFindById).toHaveBeenCalledTimes(1);
     expect(mocks.orderFindOneAndUpdate).toHaveBeenCalledTimes(1);
     expect(mocks.orderFindOneAndUpdate).toHaveBeenCalledWith(
       { _id: ORDER_ID, status: 'pending' },
@@ -293,36 +330,17 @@ describe('payOrder', () => {
   // -------------------------------------------------------------------------
 
   it('race: two concurrent payOrder calls → only one succeeds (CAS test)', async () => {
-    const ownerPending = {
-      userId: { toString: () => USER_ID },
-      status: 'pending',
-    };
     const orderDoc = makeOrderDoc({ status: 'paying' });
 
-    // 用本地计数器分配返回值（mock.calls.length 在实现返回后才递增，不可靠）：
-    //  - 第 1-3 次 → .lean() 返回 pending（预检 + CAS 失败回查）
-    //  - 第 4+ 次 → .lean() 直接返回 {status: 'paying'}（CAS 失败分支的支付中状态）
-    //  - 任意次 → .session() 返回 orderDoc（但只有第一个请求会走到）
-    let callIdx = 0;
-    mocks.orderFindById.mockImplementation(() => {
-      const ret: Record<string, unknown> = {};
-      ret.select = vi.fn().mockReturnThis();
-      // CAS 失败回查：OrderService 在 line 171 调 `Order.findById(orderId).lean()`，
-      // 此时 .lean() 应该返回 { status: 'paying' }，触发 PAYMENT_IN_PROGRESS 分支。
-      // 我们用闭包计数器：第 1 次预检=pending；并发跑时第 2 次仍是预检=pending；
-      // 第 3 次起是 CAS 失败回查=returning 'paying' 状态。
-      if (callIdx >= 2) {
-        ret.lean = vi.fn().mockResolvedValue({ status: 'paying' });
-      } else {
-        ret.lean = vi.fn().mockResolvedValue(ownerPending);
-      }
-      callIdx += 1;
-      ret.session = vi.fn().mockReturnValue(orderDoc);
-      return ret;
-    });
+    // C24：findById mock 同时挂 .lean 和 .session，值各自独立。
+    //  - CAS 成功的请求走事务：.session(session) → orderDoc
+    //  - CAS 失败的请求走状态回查：.lean() → {status:'paying'}（触发 PAYMENT_IN_PROGRESS）
+    // 两个并发请求谁先调 findById 不确定——所以必须两个方法都可用，避免
+    // CAS 成功的请求拿到只有 .lean 的 mock 导致 .session 返回 undefined。
+    setupFindById({ status: 'paying' }, orderDoc);
 
-    // 关键：findOneAndUpdate 第一次返回 paying（抢到锁），第二次返回 null（CAS 失败）
-    const claimed = { ...ownerPending, status: 'paying' };
+    // CAS：第一次返回完整 claimed（含 items，loadProducts 需要）；第二次返回 null（CAS 失败）
+    const claimed = makeClaimed();
     mocks.orderFindOneAndUpdate
       .mockResolvedValueOnce(claimed)
       .mockResolvedValueOnce(null); // 第二次 CAS 失败
@@ -367,8 +385,10 @@ describe('payOrder', () => {
     expect(err.code).toBe('PAYMENT_IN_PROGRESS');
     expect(err.status).toBe(409);
 
-    // 断言 CAS 只触发了一次成功
+    // 断言 CAS 触发了两次（1 成功 + 1 失败）
     expect(mocks.orderFindOneAndUpdate).toHaveBeenCalledTimes(2);
+    // findById：1st request 1 次（事务内） + 2nd request 1 次（CAS 失败回查） = 2 次
+    expect(mocks.orderFindById).toHaveBeenCalledTimes(2);
     // 库存扣减应该只在第一个请求里跑过一次
     expect(mocks.productUpdateOne).toHaveBeenCalledTimes(1);
     expect(mocks.voucherInsertMany).toHaveBeenCalledTimes(1);
@@ -378,21 +398,14 @@ describe('payOrder', () => {
   // payOrder — loadProducts call ordering inside transaction
   // -------------------------------------------------------------------------
 
-  it('loadProducts is called inside the transaction, after stock decrement', async () => {
-    const ownerPending = {
-      userId: { toString: () => USER_ID },
-      status: 'pending',
-    };
+  it('loadProducts is called outside the transaction, before stock decrement (C13 #6 perf red)', async () => {
     const orderDoc = makeOrderDoc({ status: 'paying' });
-    setupFindById(ownerPending, orderDoc);
+    setupFindById(null, orderDoc);
 
-    // CAS 成功
-    mocks.orderFindOneAndUpdate.mockResolvedValueOnce({
-      ...ownerPending,
-      status: 'paying',
-    });
+    // CAS 成功（含 items，因为 loadProducts 读 claimed.items.map）
+    mocks.orderFindOneAndUpdate.mockResolvedValueOnce(makeClaimed());
 
-    // 记录 Product.find 和 Product.updateOne 的调用顺序
+    // 记录 Product.find 和 Product.updateOne 的调用顺序 + 何时进入事务（startSession）
     const callOrder: string[] = [];
     mocks.productUpdateOne.mockImplementation(async () => {
       callOrder.push('Product.updateOne');
@@ -414,19 +427,30 @@ describe('payOrder', () => {
         ]),
       };
     });
+    // 记录 startSession 调用顺序——用于断言 loadProducts 在事务外
+    mocks.startSession.mockImplementation(async () => {
+      callOrder.push('mongoose.startSession');
+      return makeFakeSession();
+    });
     mocks.voucherInsertMany.mockResolvedValue([]);
     mocks.cartUpdateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
 
     const actor: OrderActor = { userId: USER_ID, role: 'user' };
     await payOrder(ORDER_ID, actor);
 
-    // loadProducts 必须在 Product.updateOne（库存扣减）之后、Voucher.insertMany 之前
-    // 这是 C13 #6 perf red 的核心：loadProducts 是为 voucher 签发拿 product 当前态（voucherMeta），
-    // 必须在 stock 扣减后跑，否则 voucher 的 meta 可能基于"扣减前"的库存做计算。
-    expect(callOrder.length).toBeGreaterThanOrEqual(2);
-    expect(callOrder.indexOf('Product.updateOne')).toBeLessThan(
-      callOrder.indexOf('Product.find (loadProducts)')
-    );
+    // C24 contract：loadProducts 在事务外、startSession 之前；Product.updateOne 在事务内、startSession 之后。
+    // 这是 C13 #6 perf red 的核心：把 $in 移出事务避免 connection pool 占位 +
+    // 事务时间窗拉长。代价：若事务后续失败这次 load 是浪费的——但概率低、代价小。
+    const loadProductsIdx = callOrder.indexOf('Product.find (loadProducts)');
+    const startSessionIdx = callOrder.indexOf('mongoose.startSession');
+    const stockDecrementIdx = callOrder.indexOf('Product.updateOne');
+    expect(loadProductsIdx).toBeGreaterThanOrEqual(0);
+    expect(startSessionIdx).toBeGreaterThanOrEqual(0);
+    expect(stockDecrementIdx).toBeGreaterThanOrEqual(0);
+    // loadProducts 在 startSession 之前（事务外 pre-fetch）
+    expect(loadProductsIdx).toBeLessThan(startSessionIdx);
+    // 库存扣减在 startSession 之后（事务内）
+    expect(stockDecrementIdx).toBeGreaterThan(startSessionIdx);
     expect(mocks.voucherInsertMany).toHaveBeenCalledTimes(1);
   });
 });
