@@ -95,7 +95,11 @@ export async function addCartItem(
   input: { productId: string; variantId?: string; visitDate?: string; quantity: number }
 ) {
   await connectDB();
-  const product = (await Product.findById(input.productId).lean()) as
+  // C29-04：原来 fetch 全量 Product document——description、attributes Mixed blob、
+  // dailyInventory 全量历史、skuVariants 未选变体等都会拉过来。
+  // updateCartItem 已在 C25-03 收紧投影（CART_PRODUCT_PROJECTION），addCartItem
+  // 是兄弟路径却遗漏；补齐一致性。
+  const product = (await Product.findById(input.productId).select(CART_PRODUCT_PROJECTION).lean()) as
     | (IProduct & { _id: Types.ObjectId })
     | null;
   if (!product) throw new AppError('PRODUCT_NOT_FOUND', 'Product not found', 404);

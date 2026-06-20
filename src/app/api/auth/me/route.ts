@@ -24,7 +24,12 @@ export const GET = withError(async (req: NextRequest) => {
   const token = await getCurrentUser();
   if (!token) return NextResponse.json({ user: null });
   await connectDB();
-  const user = await User.findById(token.sub).lean();
+  // C29-03：原来 User.findById().lean() 不带投影，把 passwordHash (有 select:false 不会返回但仍走 wire)、
+  // phone、isActive、createdAt、updatedAt、__v 全拉过来——而响应只用到 email/name/role。
+  // 加 .select('email name role') 把 wire + decode 工作量降到最小。
+  // 这是 C24-16 deferral 的重审：原 deferral 论点是"响应已 hard-code 重塑，安全"——确实安全，
+  // 但 perf 维度上仍有浪费。本次收紧只动 select，response shape 不变。
+  const user = await User.findById(token.sub).select('email name role').lean();
   if (!user) return NextResponse.json({ user: null });
   return NextResponse.json({
     user: {

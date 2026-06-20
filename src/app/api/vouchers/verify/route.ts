@@ -4,6 +4,7 @@ import { withAuth } from '@/lib/middleware/withAuth';
 import { withValidation } from '@/lib/middleware/withValidation';
 import { AppError } from '@/lib/middleware/withError';
 import { rateLimit } from '@/lib/middleware/rateLimit';
+import { AUTH_COOKIE } from '@/lib/auth/session';
 import { z } from 'zod';
 import type { NextRequest } from 'next/server';
 
@@ -27,8 +28,8 @@ const limiter = rateLimit({
   max: 30,
   // 维度：用户（staff/admin）+ path。同 staff 在不同 IP 登录也算一个桶。
   key: (req: NextRequest) => {
-    const uid = req.cookies.get('tk_session')?.value ?? 'anon';
-    return `verify:${uid}:${new URL(req.url).pathname}`;
+    const uid = req.cookies.get(AUTH_COOKIE)?.value ?? 'anon';
+    return `verify:${uid}:${req.nextUrl.pathname}`;
   },
 });
 

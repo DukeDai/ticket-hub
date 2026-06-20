@@ -204,7 +204,11 @@ export async function getProductById(
   if (!mongoose.isValidObjectId(id)) return null;
   const q = Product.findById(id);
   if (opts?.select) q.select(opts.select);
-  const p = await q.populate('categoryId', 'name slug ticketType').lean();
+  // C29-05：移除 hardcode populate——/api/products/[id] 传入 select 包含 categoryId
+  // (raw ObjectId，不含 name/slug/ticketType)，populate 是死代码；frontend product/[slug]
+  // 页面用自己独立的 findOne+populate，不走此函数。留空，不做默认 populate，
+  // 避免无 select 时每次都多一次 Category lookup。
+  const p = await q.lean();
   if (!p) return null;
   // 通过 shouldBumpView 节流增加 viewCount（C15/C17）
   if (shouldBumpView(opts?.ip ?? null, id)) {

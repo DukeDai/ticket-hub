@@ -5,19 +5,22 @@ import { withAuth } from '@/lib/middleware/withAuth';
 import { withValidation } from '@/lib/middleware/withValidation';
 import { withError, AppError } from '@/lib/middleware/withError';
 import { CreateCategorySchema } from '@/lib/validation/schemas';
+import { listActiveCategoriesForUI } from '@/lib/services/CategoryService';
 
 /**
  * GET  /api/categories  公开
  * POST /api/categories  admin
  *
  * HOF 链：withError → withAuth → withValidation。
+ *
+ * C29-02：GET 改用 listActiveCategoriesForUI（CMS / 前台 5 个 SSR 页面共享的 cacheSWR，
+ * 60s fresh / 300s stale），消除每次公开请求都重发 Category.find() 的浪费。
+ * CategoryManager 不消费 GET 列表（仅 POST 后用响应里的 id 写入本地 state），
+ * 投影收紧到 name/slug/ticketType/sortOrder 是安全的。
  */
 
 export const GET = withError(async () => {
-  await connectDB();
-  const list = await Category.find({ isActive: true })
-    .sort({ sortOrder: 1, name: 1 })
-    .lean();
+  const list = await listActiveCategoriesForUI();
   return NextResponse.json({ items: list });
 });
 

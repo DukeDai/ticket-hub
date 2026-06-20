@@ -6,6 +6,7 @@ import { withValidation } from '@/lib/middleware/withValidation';
 import { AppError } from '@/lib/middleware/withError';
 import { buildPagination, pageResult } from '@/lib/utils/pagination';
 import { rateLimit, hashKeyPart } from '@/lib/middleware/rateLimit';
+import { AUTH_COOKIE } from '@/lib/auth/session';
 import { z } from 'zod';
 
 const Query = z.object({
@@ -25,8 +26,8 @@ const listLimiter = rateLimit({
   windowMs: 60_000,
   max: 120,
   key: (req: NextRequest) => {
-    const cookie = req.cookies.get('tk_session')?.value ?? 'anon';
-    return `vouchers:list:${hashKeyPart(cookie)}:${new URL(req.url).pathname}`;
+    const cookie = req.cookies.get(AUTH_COOKIE)?.value ?? 'anon';
+    return `vouchers:list:${hashKeyPart(cookie)}:${req.nextUrl.pathname}`;
   },
 });
 

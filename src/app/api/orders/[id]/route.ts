@@ -3,6 +3,7 @@ import { connectDB } from '@/lib/db';
 import { Order } from '@/models';
 import { withAuth } from '@/lib/middleware/withAuth';
 import { rateLimit, hashKeyPart } from '@/lib/middleware/rateLimit';
+import { AUTH_COOKIE } from '@/lib/auth/session';
 import { AppError } from '@/lib/middleware/withError';
 import mongoose from 'mongoose';
 
@@ -19,8 +20,8 @@ const orderGetLimiter = rateLimit({
   windowMs: 60_000,
   max: 60,
   key: (req: NextRequest) => {
-    const cookie = req.cookies.get('tk_session')?.value ?? 'anon';
-    return `orders:get:${hashKeyPart(cookie)}:${new URL(req.url).pathname}`;
+    const cookie = req.cookies.get(AUTH_COOKIE)?.value ?? 'anon';
+    return `orders:get:${hashKeyPart(cookie)}:${req.nextUrl.pathname}`;
   },
 });
 

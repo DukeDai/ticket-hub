@@ -8,6 +8,7 @@ import { CreateOrderSchema, PaginationQuery } from '@/lib/validation/schemas';
 import { createOrder } from '@/lib/services/OrderService';
 import { buildPagination, pageResult } from '@/lib/utils/pagination';
 import { rateLimit, hashKeyPart } from '@/lib/middleware/rateLimit';
+import { AUTH_COOKIE } from '@/lib/auth/session';
 import type { AccessTokenPayload } from '@/lib/auth/jwt';
 import mongoose from 'mongoose';
 
@@ -30,7 +31,7 @@ const orderCreateLimiter = rateLimit({
   windowMs: 60_000,
   max: 30,
   key: (req: NextRequest) => {
-    const cookie = req.cookies.get('tk_session')?.value ?? 'anon';
+    const cookie = req.cookies.get(AUTH_COOKIE)?.value ?? 'anon';
     return `orders:create:${hashKeyPart(cookie)}`;
   },
 });
@@ -39,8 +40,8 @@ const listLimiter = rateLimit({
   windowMs: 60_000,
   max: 60,
   key: (req: NextRequest) => {
-    const cookie = req.cookies.get('tk_session')?.value ?? 'anon';
-    return `orders:list:${hashKeyPart(cookie)}:${new URL(req.url).pathname}`;
+    const cookie = req.cookies.get(AUTH_COOKIE)?.value ?? 'anon';
+    return `orders:list:${hashKeyPart(cookie)}:${req.nextUrl.pathname}`;
   },
 });
 
