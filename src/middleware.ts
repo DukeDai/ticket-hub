@@ -3,8 +3,12 @@ import { NextResponse, type NextRequest } from 'next/server';
 /**
  * 全局 middleware：
  *  - 给 GET /api/products 等公开接口添加 Cache-Control 头（CDN/浏览器缓存）。
- *  - 安全头（X-Content-Type-Options, Referrer-Policy, X-Frame-Options）。
  *  - CSRF 防护：mutating 请求必须来自 ALLOWED_ORIGINS 之一。
+ *
+ * 安全头（X-Content-Type-Options、Referrer-Policy、X-Frame-Options、HSTS、CSP）
+ * 由 `next.config.js` 的 `headers()` 统一配置，作为全局单一来源。middleware
+ * 只负责动态逻辑（CSRF、Cache-Control per-path），不再重复设置安全头
+ * —— 见 C24-06 / C25-02。
  */
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:3000')
@@ -110,10 +114,8 @@ export function middleware(req: NextRequest) {
       res.headers.set('Cache-Control', 'private, no-store');
     }
   }
-  // 安全头
-  res.headers.set('X-Content-Type-Options', 'nosniff');
-  res.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.headers.set('X-Frame-Options', 'DENY');
+  // 安全头统一由 next.config.js headers() 设置（X-Content-Type-Options、
+  // Referrer-Policy、X-Frame-Options；prod 还有 HSTS + CSP）。详见 C24-06 / C25-02。
 
   return res;
 }
