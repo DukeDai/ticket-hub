@@ -1,5 +1,6 @@
-import type { IProductStrategy, PricingContext, StockCheckResult, QuoteResult, VoucherMeta } from './types';
+import type { IProductStrategy, StockCheckResult, QuoteResult, VoucherMeta } from './types';
 import { simpleStock } from './types-helpers';
+import { computeExpiresAt } from './voucher-helpers';
 
 /**
  * 餐饮券策略：
@@ -21,12 +22,6 @@ export const DiningStrategy: IProductStrategy = {
   voucherMeta(_ctx, _paidAt): VoucherMeta {
     const stores = (_ctx.product.attributes?.stores as string[] | undefined) ?? [];
     const badge = stores.length ? `适用：${stores.slice(0, 3).join('、')}` : undefined;
-    let expiresAt: Date | undefined;
-    if (_ctx.product.validDaysAfterPurchase) {
-      expiresAt = new Date(_paidAt.getTime() + _ctx.product.validDaysAfterPurchase * 86400000);
-    } else if (_ctx.product.validTo) {
-      expiresAt = new Date(_ctx.product.validTo);
-    }
-    return { badge, expiresAt };
+    return { badge, expiresAt: computeExpiresAt(_ctx.product, _paidAt) };
   },
 };

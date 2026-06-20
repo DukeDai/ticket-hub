@@ -1,6 +1,7 @@
 import type { IProductStrategy, StockCheckResult, QuoteResult, VoucherMeta } from './types';
 import { simpleStock, dailyStock } from './types-helpers';
 import { AppError } from '@/lib/middleware/withError';
+import { computeExpiresAt } from './voucher-helpers';
 
 /**
  * 体验券策略（漂流、温泉、SPA 等）：
@@ -50,12 +51,6 @@ export const ExperienceStrategy: IProductStrategy = {
     ]
       .filter(Boolean)
       .join(' · ');
-    let expiresAt: Date | undefined;
-    if (ctx.product.validDaysAfterPurchase) {
-      expiresAt = new Date(_paidAt.getTime() + ctx.product.validDaysAfterPurchase * 86400000);
-    } else if (ctx.product.validTo) {
-      expiresAt = new Date(ctx.product.validTo);
-    }
-    return { badge: badge || undefined, expiresAt };
+    return { badge: badge || undefined, expiresAt: computeExpiresAt(ctx.product, _paidAt) };
   },
 };

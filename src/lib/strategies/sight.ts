@@ -1,6 +1,7 @@
 import type { IProductStrategy, StockCheckResult, QuoteResult, VoucherMeta } from './types';
 import { simpleStock, dailyStock } from './types-helpers';
 import { AppError } from '@/lib/middleware/withError';
+import { computeExpiresAt } from './voucher-helpers';
 
 /**
  * 景区门票策略。
@@ -47,12 +48,6 @@ export const SightStrategy: IProductStrategy = {
 
   voucherMeta(ctx, _paidAt): VoucherMeta {
     const badge = ctx.visitDate ? `入园日期：${ctx.visitDate}` : undefined;
-    let expiresAt: Date | undefined;
-    if (ctx.product.validDaysAfterPurchase) {
-      expiresAt = new Date(_paidAt.getTime() + ctx.product.validDaysAfterPurchase * 86400000);
-    } else if (ctx.product.validTo) {
-      expiresAt = new Date(ctx.product.validTo);
-    }
-    return { badge, expiresAt };
+    return { badge, expiresAt: computeExpiresAt(ctx.product, _paidAt) };
   },
 };
