@@ -169,18 +169,23 @@ export async function payOrder(orderId: string, actor: OrderActor) {
     //  - paid → 幂等返回当前订单（200，前端可安全重试）
     //  - paying → 另一笔支付在跑（409）
     //  - cancelled / expired / 其他 → 拒绝
-    // C25-02: 只读 status，加 .select() 避免拉全文档（CAS 失败的请求
-    // 是非常态但每次都付全文档代价不值得）。C24-13 deferred 到本轮 apply。
-    const current = await Order.findById(orderId).select('status').lean();
-    if (current?.status === 'paid') return current as IOrder;
-    if (current?.status === 'paying') {
+    // C26-01 修复：移除 C25-02 的 `.select('status')` + `as IOrder` cast。
+    // 早返回路径（paid 幂等）需要返回完整 order doc 给客户端——route handler
+    // 直接 `NextResponse.json({ order })`，partial doc（仅 _id+status）会让
+    // 客户端 retry UI 看到缺 items / totalAmountInCents / contact 的空对象。
+    // C25-02 的 perf 优化（避免 CAS 失败时拉全文档）在这个路径上是反向的——
+    // 反正 paid 路径都要再发一份完整 doc 给用户，索性一次 fetch 拿全。
+    // CAS 失败本身是稀有路径（每笔订单最多 1 次），全文档 fetch 成本可忽略。
+    const current = await Order.findById(orderId).lean();
+    if (!current) throw new AppError('NOT_FOUND', 'Order not found', 404);
+    if (current.status === 'paid') return current as unknown as IOrder;
+    if (current.status === 'paying') {
       throw new AppError(
         'PAYMENT_IN_PROGRESS',
         'Another payment is in progress for this order',
         409
       );
     }
-    if (!current) throw new AppError('NOT_FOUND', 'Order not found', 404);
     if (current.status === 'cancelled') {
       throw new AppError('ORDER_CANCELLED', 'Order has been cancelled', 422);
     }
