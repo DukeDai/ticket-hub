@@ -62,6 +62,7 @@ const SAFE_MESSAGES: Record<string, string> = {
   SLUG_TAKEN: 'Slug already in use',
   WEAK_PASSWORD: 'Password is too weak',
   VALIDATION_ERROR: 'Request validation failed',
+  ACCOUNT_INVALID: 'Your account is not properly configured',
 };
 
 function safeMessageFor(code: string, fallback: string): string {

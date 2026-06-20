@@ -35,6 +35,26 @@ const limiter = rateLimit({
 const validated = withValidation({ body: Schema }, async ({ body, req }) => {
   // rateLimit 必须先于 connectDB / DB 查询——attacker 用 invalid body 打爆 DB 连接池。
   limiter(req);
+
+  // C25-04 (C24-09): 用户名校验必须在 Voucher 查询之前。
+  // 原 flow 在 Voucher.findOne 之后才检查 user.name —— 三个泄漏向量：
+  //   1. 一个 name 为空的 staff 仍能 probe voucher 状态（NOT_FOUND / INVALID_STATUS / EXPIRED）
+  //      → 用错误码差异做 side-channel enumeration
+  //   2. "Verifier account must have a non-empty display name; please update your profile" 详细
+  //      消息暴露 ACCOUNT_INVALID 不在 SAFE_MESSAGES 白名单 → 直接透传到客户端
+  //   3. 错误账号走完 voucher 查询后才被拒，浪费 DB roundtrip
+  // 修法：name 检查放在所有 voucher 工作之前；ACCOUNT_INVALID 进 SAFE_MESSAGES
+  // （用 generic 消息替代内部细节）。
+  //
+  // 服务端绑定核销人：审计字段必须来自鉴权上下文，不能让 staff 伪造。
+  // C8 防御：user.name 为空字符串时（如未来 CMS 创建 staff 跳过 RegisterSchema），
+  // 兜底走 user.sub 会把 ObjectId 写入 usedBy——审计员能据此反查 User 集合。
+  const user = (req as NextRequest & { user?: { sub: string; name?: string } | null }).user;
+  if (!user?.name) {
+    throw new AppError('ACCOUNT_INVALID', 'Your account is not properly configured', 422);
+  }
+  const usedBy = user.name;
+
   await connectDB();
   const voucher = await Voucher.findOne({ code: body.code });
   if (!voucher) throw new AppError('NOT_FOUND', 'Voucher not found', 404);
@@ -46,19 +66,6 @@ const validated = withValidation({ body: Schema }, async ({ body, req }) => {
     await voucher.save();
     throw new AppError('EXPIRED', 'Voucher has expired', 422);
   }
-  // 服务端绑定核销人：审计字段必须来自鉴权上下文，不能让 staff 伪造。
-  // C8 防御：user.name 为空字符串时（如未来 CMS 创建 staff 跳过 RegisterSchema），
-  // 兜底走 user.sub 会把 ObjectId 写入 usedBy——审计员能据此反查 User 集合。
-  // 显式检查 name 非空，无 name 则直接拒绝核销，让 staff 走修账号流程。
-  const user = (req as NextRequest & { user?: { sub: string; name?: string } | null }).user;
-  if (!user?.name) {
-    throw new AppError(
-      'ACCOUNT_INVALID',
-      'Verifier account must have a non-empty display name; please update your profile',
-      422
-    );
-  }
-  const usedBy = user.name;
   // 原子核销：避免两个核销员同时成功扣同一张券
   const updated = await Voucher.findOneAndUpdate(
     { _id: voucher._id, status: 'active' },
