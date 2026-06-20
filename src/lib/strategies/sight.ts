@@ -26,11 +26,18 @@ export const SightStrategy: IProductStrategy = {
 
   validateVisitDate(ctx) {
     if (!ctx.visitDate) return;
-    const d = new Date(ctx.visitDate);
+    // C24-02 (🟡): parse YYYY-MM-DD as LOCAL date, not UTC midnight.
+    // V8's `new Date('YYYY-MM-DD')` is UTC midnight, which for UTC-negative
+    // timezone users (e.g. PST UTC-8) becomes yesterday at 16:00 local —
+    // a same-day ticket purchase would trip DATE_IN_PAST.
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ctx.visitDate);
+    if (!m) {
+      throw new AppError('INVALID_DATE', `Invalid visitDate ${ctx.visitDate}`, 422);
+    }
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
     if (Number.isNaN(d.getTime())) {
       throw new AppError('INVALID_DATE', `Invalid visitDate ${ctx.visitDate}`, 422);
     }
-    // 不可早于今天
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     if (d.getTime() < today.getTime()) {
