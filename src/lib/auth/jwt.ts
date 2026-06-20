@@ -33,9 +33,17 @@ const MIN_SECRET_BYTES = 32;
 
 /**
  * 开发/测试场景下的弱密钥逃生口。
- * 显式置 1 才能放过 < 32 字节的密钥；生产环境应保持未设置。
+ * 显式置 1 才能放过 < 32 字节的密钥；生产环境强制禁用。
+ *
+ * C25-03 (C24-08): production 必须强制 min-length 32 守卫。
+ * 原因：环境变量管理失误 / 镜像回滚 / 误提交 ALLOW_WEAK_JWT_SECRET=1 到
+ * production .env 会让 HS256 密钥强度形同虚设——HS256 + 弱密钥可被离线
+ * 爆破（参考 RFC 2104 + OWASP JWT cheat sheet）。
+ * 修法：仅当 NODE_ENV !== 'production' 时才看 ALLOW_WEAK_JWT_SECRET；
+ * production 直接返回 false（无论环境变量是否置 1）。
  */
 function isWeakSecretAllowed(): boolean {
+  if (process.env.NODE_ENV === 'production') return false;
   return process.env.ALLOW_WEAK_JWT_SECRET === '1';
 }
 
