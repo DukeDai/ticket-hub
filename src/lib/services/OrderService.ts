@@ -4,6 +4,7 @@ import { Product, Order, Voucher, Cart, type IOrder, type IOrderItem, type IProd
 import { orderNo, voucherCode } from '@/lib/utils/ids';
 import { AppError } from '@/lib/middleware/withError';
 import { getStrategy } from '@/lib/strategies';
+import { ORDER_PRODUCT_PROJECTION } from '@/lib/models/projection-keys';
 
 /**
  * 订单服务。
@@ -42,8 +43,9 @@ async function loadProducts(ids: string[]): Promise<Map<string, LeanProduct>> {
   // for variant lookup, dailyInventory stock calc, voucherMeta attributes,
   // and productSnapshot (title/cover/location). Avoid pulling the full
   // document (description, attributes Mixed blob, full dailyInventory history).
+  // C25-08: 投影字符串提到 lib/models/projection-keys.ts 集中维护。
   const docs = await Product.find({ _id: { $in: ids } })
-    .select('title status images ticketType location skuVariants dailyInventory attributes validDaysAfterPurchase validTo')
+    .select(ORDER_PRODUCT_PROJECTION)
     .lean<LeanProduct[]>();
   return new Map(docs.map((d: LeanProduct) => [String(d._id), d]));
 }

@@ -3,6 +3,7 @@ import { connectDB } from '@/lib/db';
 import { Cart, Product, type ICartItem, type IProduct } from '@/models';
 import { AppError } from '@/lib/middleware/withError';
 import { getStrategy } from '@/lib/strategies';
+import { CART_PRODUCT_PROJECTION } from '@/lib/models/projection-keys';
 
 /**
  * 购物车逻辑：
@@ -48,9 +49,7 @@ export async function getCart(userId: string) {
   const cart = await loadCart(userId);
   const productIds = cart.items.map((i: ICartItem) => i.productId);
   const products = (await Product.find({ _id: { $in: productIds } })
-    .select(
-      'title slug images priceInCents originalPriceInCents status stock sold dailyInventory skuVariants ticketType'
-    )
+    .select(CART_PRODUCT_PROJECTION)
     .lean()) as unknown as ProductLean[];
   const productMap = new Map<string, ProductLean>(
     products.map((p: ProductLean) => [String(p._id), p])
@@ -195,9 +194,7 @@ async function buildCartViewModel(
     .filter((id) => id !== String(touchedProduct._id));
   if (otherIds.length > 0) {
     const others = (await Product.find({ _id: { $in: otherIds } })
-      .select(
-        'title slug images priceInCents originalPriceInCents status stock sold dailyInventory skuVariants ticketType'
-      )
+      .select(CART_PRODUCT_PROJECTION)
       .lean()) as unknown as ProductLean[];
     for (const p of others) {
       productMap.set(String(p._id), p);
