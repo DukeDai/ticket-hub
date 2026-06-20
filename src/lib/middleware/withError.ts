@@ -63,6 +63,13 @@ const SAFE_MESSAGES: Record<string, string> = {
   WEAK_PASSWORD: 'Password is too weak',
   VALIDATION_ERROR: 'Request validation failed',
   ACCOUNT_INVALID: 'Your account is not properly configured',
+  // C25-05: 防御性添加（strategy / UserService 抛 AppError 但 code 未在白名单）
+  // INVALID_DATE / DATE_IN_PAST: sight.ts / experience.ts validateVisitDate 抛出
+  // EMAIL_TAKEN: UserService.registerUser 在 exists check 时抛出
+  // 这些 code 即使从非常规路径抛到 withError，也能拿到 generic message。
+  INVALID_DATE: 'Invalid visit date format',
+  DATE_IN_PAST: 'Visit date must be today or a future date',
+  EMAIL_TAKEN: 'An account with this email already exists',
 };
 
 function safeMessageFor(code: string, fallback: string): string {
