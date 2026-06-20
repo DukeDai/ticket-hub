@@ -388,17 +388,47 @@ export async function payOrder(orderId: string, actor: OrderActor) {
 
 export async function cancelOrder(orderId: string, actor: OrderActor) {
   await connectDB();
-  const order = await Order.findById(orderId);
-  if (!order) throw new AppError('NOT_FOUND', 'Order not found', 404);
+  if (!mongoose.isValidObjectId(orderId)) {
+    throw new AppError('INVALID_ID', 'Invalid order id', 400);
+  }
   const isPrivileged = actor.role === 'admin' || actor.role === 'staff';
-  if (!isPrivileged && String(order.userId) !== String(actor.userId)) {
+
+  // C25-01 (C24-03): mirror payOrder CAS pattern; bake userId into filter.
+  // 原 flow：findById → 检查 userId → 检查 status → save。三次 roundtrip 暴露 TOCTOU 窗口：
+  // 两个并发 cancel 都看到 'pending'，都写 'cancelled'，最后写者赢（cancelledAt 也覆盖）。
+  // 修法：CAS 把 status='pending' 作为 filter 之一；非特权用户再加 userId 过滤。
+  // —— 一次原子操作完成"读+检查+写"，并发只能有一个胜出。
+  // 副作用：filter 不匹配的请求不会触发任何写入，所以非授权用户既不能 cancel
+  // 也不能通过副作用探测订单状态（与 payOrder 在事务外预检 + 事务内复检的模式相反）。
+  const filter: Record<string, unknown> = { _id: orderId, status: 'pending' };
+  if (!isPrivileged) {
+    filter.userId = new mongoose.Types.ObjectId(actor.userId);
+  }
+
+  const claimed = await Order.findOneAndUpdate(
+    filter,
+    { $set: { status: 'cancelled', cancelledAt: new Date() } },
+    { new: true }
+  );
+  if (claimed) {
+    return claimed.toObject();
+  }
+
+  // CAS 失败：用一次 fallback 读确定当前状态
+  const current = await Order.findById(orderId).lean();
+  if (!current) throw new AppError('NOT_FOUND', 'Order not found', 404);
+  // 非特权用户：filter 不匹配有两种原因——userId 不对 或 status 已变。
+  // 这里 current.userId 不对 → 是 owner mismatch 而非 status 问题（filter 已保证 status 不可能仍为 pending）
+  if (!isPrivileged && String(current.userId) !== String(actor.userId)) {
     throw new AppError('FORBIDDEN', 'Not your order', 403);
   }
-  if (order.status !== 'pending') {
-    throw new AppError('INVALID_STATUS', `Cannot cancel order in status ${order.status}`, 422);
+  // 幂等：已经是 cancelled → 直接返回当前订单（前端可安全重试）
+  if (current.status === 'cancelled') {
+    return current as IOrder;
   }
-  order.status = 'cancelled';
-  order.cancelledAt = new Date();
-  await order.save();
-  return order.toObject();
+  throw new AppError(
+    'INVALID_STATUS',
+    `Cannot cancel order in status ${current.status}`,
+    422
+  );
 }
