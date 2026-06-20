@@ -201,10 +201,16 @@ function makeFakeSession() {
  * 若 callIdx-based 分派（callIdx=0 → 只 .session；callIdx=1 → 只 .lean），
  * CAS 成功的请求可能拿到只有 .lean 的 mock → .session 返回 undefined → NOT_FOUND。
  * 让每次 findById 同时挂两个方法即可避免该竞争。
+ *
+ * C25 更新：CAS-failure 分支改用 `Order.findById(id).select('status').lean()`
+ * （C25-02: 只读 status，加 .select() 避免拉全文档）。mock 需要支持
+ * `.select()` 链式调用。`.select()` 用 mockReturnThis() 返回 ret 本身，
+ * 这样后续 `.lean()` 仍然命中同一个 leanValue。
  */
 function setupFindById(leanValue: unknown, sessionValue: unknown) {
   mocks.orderFindById.mockImplementation(() => {
     const ret: Record<string, unknown> = {};
+    ret.select = vi.fn().mockReturnThis();
     ret.lean = vi.fn().mockResolvedValue(leanValue);
     ret.session = vi.fn().mockReturnValue(sessionValue);
     return ret;

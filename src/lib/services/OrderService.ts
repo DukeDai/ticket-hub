@@ -167,7 +167,9 @@ export async function payOrder(orderId: string, actor: OrderActor) {
     //  - paid → 幂等返回当前订单（200，前端可安全重试）
     //  - paying → 另一笔支付在跑（409）
     //  - cancelled / expired / 其他 → 拒绝
-    const current = await Order.findById(orderId).lean();
+    // C25-02: 只读 status，加 .select() 避免拉全文档（CAS 失败的请求
+    // 是非常态但每次都付全文档代价不值得）。C24-13 deferred 到本轮 apply。
+    const current = await Order.findById(orderId).select('status').lean();
     if (current?.status === 'paid') return current as IOrder;
     if (current?.status === 'paying') {
       throw new AppError(
