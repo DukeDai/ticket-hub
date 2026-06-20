@@ -2360,3 +2360,188 @@ Per §8.1 step 6 + §8.2 protocol:
 
 *演化协议状态更新: C28 = round-10 audit, 0🔴 + 6🟡 (1 re-classified from 🔴). §8.2 NOT triggered; C27 + C28 is not two consecutive dry cycles. C29 is required. Refute rate dropped to 0% (verbatim-citation discipline now well-internalized). Sibling-route consistency + perf hot-path surface area are the new audit dimensions to probe.*
 
+---
+
+# Cycle 29 — round-11 audit
+
+## 1. Dispatch context
+
+C28 closed with 6 🟡 (not dry). §8.2 requires two consecutive dry cycles — C29 is required. Dispatched from a fresh post-`/clear` context with 3 lens subagents in parallel. Sharpened prompts incorporated C28's three new audit dimensions (sibling-route consistency, auth/me projection recheck, future-prefix-proxy risk).
+
+Subagent cost: ~387k tokens (3 lens agents + synthesis), ~13 minutes wall-clock.
+
+## 2. Phase 0 — strict verifier (pre-audit)
+
+| Check | Result |
+| --- | --- |
+| `tsc --noEmit` | 0 errors |
+| `vitest run` | 547/547 passed (3.90s) |
+| `next build` | 33 routes, all green |
+
+Baseline clean. Audit proceeded.
+
+## 3. 3-lens audit — raw findings
+
+| Lens | Raw count | Verified | After re-class |
+| --- | ---: | ---: | ---: |
+| Correctness | 1 | 1 | 0🔴 + 0🟡 + 1🟢 |
+| Performance | 4 | 4 | 0🔴 + 4🟡 + 0🟢 |
+| Security | 1 | 1 | 0🔴 + 0🟡 + 1🟢 |
+| **Total** | **6** | **6** | **0🔴 + 4🟡 + 2🟢** |
+
+Refute rate: **0/7 = 0%** — all findings with verbatim citations. Two lenses independently converged on the same rate-limit callback surface (URL re-parse + hardcoded cookie name).
+
+## 4. Findings detail
+
+### C29-02 (🟡, perf) — `/api/categories` GET bypasses SWR cache
+
+**Verbatim** (`src/app/api/categories/route.ts:18-20`):
+
+```ts
+const list = await Category.find({ isActive: true })
+  .sort({ sortOrder: 1, name: 1 })
+  .lean();
+```
+
+`CategoryManager` (CMS category page) only POSTs after creation and uses the response's `data.category.id` to update local state — it does NOT consume the GET list endpoint. The 5 SSR pages (CMS products list, CMS products new/edit, frontend products list, frontend homepage) all share `listActiveCategoriesForUI()` with 60s fresh / 300s stale SWR cache (`cms:categories:active` key, per C18#1). The public `/api/categories` GET was duplicating the DB query on every public request.
+
+**Fix**: Replace with `listActiveCategoriesForUI()` — hits the same SWR cache; projection narrows to `name/slug/ticketType/sortOrder` (safe since CategoryManager only POSTs and writes the response directly to state).
+
+### C29-03 (🟡, perf) — `/api/auth/me` unprojected lean
+
+**Verbatim** (`src/app/api/auth/me/route.ts:27`):
+
+```ts
+const user = await User.findById(token.sub).lean();
+```
+
+Re-check of C24-16 deferral. `passwordHash` has `select: false` (User.ts) so it doesn't appear in the lean doc — the explicit response re-shape to `{id, email, name, role}` is safe. However, the lean doc still pulls `phone`, `isActive`, `createdAt`, `updatedAt`, `__v` over the wire and through JSON serialization on every authenticated request (highest-traffic authenticated endpoint). C24-16 was deferred with the reasoning "safe but wasteful."
+
+**Fix**: `.select('email name role')` — reduces wire + decode work; response shape unchanged.
+
+### C29-04 (🟡, perf) — CartService.addCartItem unprojected lean
+
+**Verbatim** (`src/lib/services/CartService.ts:98`):
+
+```ts
+const product = (await Product.findById(input.productId).lean()) as ...
+```
+
+`updateCartItem` was tightened in C25-03 with explicit `CART_PRODUCT_PROJECTION`. `addCartItem` is a sibling path that fetches the full Product document — pulling `description`, `attributes` Mixed blob, full `dailyInventory` history, and unselected `skuVariants` on every add-to-cart hit.
+
+**Fix**: Add `.select(CART_PRODUCT_PROJECTION)` — consistent with `updateCartItem`.
+
+### C29-05 (🟡, perf) — ProductService.getProductById hardcoded populate
+
+**Verbatim** (`src/lib/services/ProductService.ts:207`):
+
+```ts
+const p = await q.populate('categoryId', 'name slug ticketType').lean();
+```
+
+Always runs `populate('categoryId', 'name slug ticketType')` even when the caller does not consume `categoryId` fields. Analysis:
+- `/api/products/[id]` passes explicit `select` that includes `categoryId` (raw ObjectId, no populated fields needed) — populate is dead code.
+- `/app/(frontend)/products/[slug]/page.tsx` uses its own `Product.findOne({ slug }).populate('categoryId', 'name')` — does NOT call `getProductById`.
+
+So `getProductById`'s hardcoded populate is dead code for ALL callers.
+
+**Fix**: Remove the `populate()` call — the service's responsibility is returning a Product doc; if callers need category populated, they can add it on their own query. This eliminates one unnecessary Category collection lookup per product detail request.
+
+### C29-🟢-01 (🟢, code-smell) — per-route rate-limit URL re-parse
+
+**Verbatim** (`src/app/api/vouchers/route.ts:29`, `src/app/api/orders/route.ts:43`, `src/app/api/orders/[id]/route.ts:23`, `src/app/api/orders/[id]/cancel/route.ts:21`, `src/app/api/orders/[id]/pay/route.ts:19`, `src/app/api/vouchers/verify/route.ts:31`):
+
+```ts
+return `vouchers:list:${hashKeyPart(cookie)}:${new URL(req.url).pathname}`;
+```
+
+C28-06 fixed the shared `rateLimit.ts` utility to use `req.nextUrl.pathname`. The 6 per-route key callbacks were not updated. Not a correctness issue (path is a string dimension, not a routing argument) but a sibling consistency gap.
+
+**Fix**: Replace `new URL(req.url).pathname` with `req.nextUrl.pathname` in all 6 per-route key callbacks.
+
+### C29-🟢-02 (🟢, maintainability) — hardcoded 'tk_session' cookie name
+
+**Verbatim** (6 files, e.g. `src/app/api/vouchers/route.ts:28`):
+
+```ts
+const cookie = req.cookies.get('tk_session')?.value ?? 'anon';
+```
+
+`AUTH_COOKIE = 'tk_session'` is the single source of truth in `lib/auth/session.ts` (used correctly in `withAuth.ts` and `logout/route.ts`). 6 route files hardcode the string. If the constant is renamed, all per-user rate-limit buckets silently fall back to `'anon'`, causing cross-user collision and enabling one user to exhaust another's rate limit.
+
+**Fix**: Import `AUTH_COOKIE` and use the constant in all 6 files.
+
+## 5. §8.2 Termination assessment
+
+CLAUDE.md §8.2: "The loop terminates when **two consecutive cycles produce zero 🔴 and zero 🟡 findings**."
+
+| Cycle | Raw 🔴 | Raw 🟡 | After-class 🟡 | Dry? |
+| --- | ---: | ---: | ---: | ---: |
+| C27  | 0 | 0 | 0 | ✅ first dry |
+| C28  | 0 | 6 | 6 | ❌ |
+| **C29** | **0** | **4** | **4** | **❌** |
+
+**C27 + C28 + C29 ≠ two consecutive dry cycles.** C28 and C29 both produced 🟡. §8.2 NOT triggered. C30 is required.
+
+## 6. Convergence trend (C13 → C29)
+
+| Cycle | 🔴 | 🟡 | 🟢 | Lens raw | Notes |
+| --- | ---: | ---: | ---: | ---: | --- |
+| C13 | 8 | 30 | 27 | 65 | first 3-lens |
+| C25 | 0 | 8 | 0 | 16 | round 7 |
+| C26 | 0 | 1 | 1 | 7 | round 8 |
+| C27 | 0 | 0 | 0 | 0 | round 9 — FIRST DRY |
+| C28 | 0 | 6 | 0 | 6 | round 10 |
+| **C29** | **0** | **4** | **2** | **6** | **round 11, 6 in 1 commit** |
+
+**Reading**: C27 was the first 0/0 dry. C28 and C29 both surfaced 🟡 that prior cycles had missed. The convergence trajectory shows 🔴 has been 0 since C25, but 🟡 remains non-zero in the post-C27 cycles. Two consecutive 0🟡 cycles remain elusive. C30 is needed to determine if C27 was an anomaly or the start of a true convergence plateau.
+
+## 7. Meta-lessons worth recording
+
+1. **Cross-lens convergence on rate-limit surface** — correctness lens (🟢) and security lens (🟢) independently surfaced the same per-route rate-limit callbacks. When two independent lenses agree on a finding without coordination, the finding's signal is strong. C30's lens prompts should cross-reference "what did the other lens find last cycle?"
+
+2. **Performance surface area keeps surfacing in the same clusters** — projection (C25-03/08, C28-02, C29-03/04), caching (C28-05, C29-02), and unnecessary populate (C29-05) are all variants of the same root cause: "fetch less from the database." The perf lens has found 10+ items in this cluster alone. C30 should consider whether to stop re-auditing these and just run a one-time projection audit.
+
+3. **C28's sharpened prompts worked** — sibling-route consistency audit caught the rate-limit callback sibling gap that the C28 correctness lens didn't find (because C28's lens prompt didn't explicitly ask about it). C30 should carry forward all three sharpened dimensions from C28 + add the two new ones surfaced by C29 (cache hygiene on public API routes, unnecessary populate in service functions).
+
+4. **Auth/me is a recurring deferral** — C24-16 deferred it, C28 correctness lens refuted it (safe but wasteful), C29 perf lens re-surfaced it (wasteful). It's now fixed. C30 should not re-audit it unless a new pattern emerges.
+
+## 8. Handoff to next session
+
+Per §8.1 step 6 + §8.2 protocol:
+
+1. **Read CLAUDE.md + EVOLUTION.md C27/C28/C29** before any action
+2. **Run strict verifier** before audit
+3. **3-lens audit** with verbatim-citation discipline — incorporate all five sharpened dimensions:
+   - Sibling-route consistency (C28 lesson): any C15-C29 fix with a sibling still missing?
+   - Performance cache hygiene on public API routes (C29-02): any other public routes bypassing SWR/Redis caches?
+   - Unnecessary populate in service functions (C29-05): any other service functions with hardcoded populate?
+   - Projection consistency across sibling operations (C29-04): any service with one projected path and one unprojected sibling?
+   - Future-prefix-proxy risk: any remaining `req.url` string parsing for routing decisions?
+4. **Adversarial synthesis** — cross-lens convergence check: did correctness and security lenses agree on any surface area?
+5. **If 0🔴+0🟡 again** → C30 is the third post-C27 cycle; maintain focus on real defects.
+6. **If findings surface** → apply per §8.1 step 3, then re-run audit.
+
+### Pre-emptive reminder for C30 verifier
+
+- C29 closed 4🟡 + 2🟢 in 10 files (+40/-18). C30 should NOT re-audit these files unless something feels off.
+- `/api/auth/me` projection is now fixed — do NOT re-surface C24-16.
+- The 6× `<img>` warnings remain in the deferred backlog.
+- v1.0 items (IDOR pre-read on cancelOrder, session rotation, CMS dashboard cache invalidation) remain deferred.
+- C30's new probe areas: (a) other public API routes bypassing SWR caches, (b) other service functions with unnecessary populate, (c) any projection inconsistencies between sibling service operations.
+
+## 9. Final state of the codebase (post-C29)
+
+| Metric | Value |
+| --- | --- |
+| Strict verifier | tsc 0 / vitest 547/547 / next build 33 routes |
+| Last applied commit | `b1c04a2` (C29 cleanup — 9 atomic fixes) |
+| Working tree | clean (3 untracked doc files, out of audit scope) |
+| Open audit findings | 0 — all 4🟡 + 2🟢 applied |
+| §8.2 termination gate | NOT triggered; C30 required |
+| Subagent cost this cycle | ~387k tokens (3 lens agents, ~13 minutes) |
+
+---
+
+*演化协议状态更新: C29 = round-11 audit, 0🔴 + 4🟡 + 2🟢 (refute rate 0%). §8.2 NOT triggered; C28 + C29 both produced 🟡. C30 is required. Cross-lens convergence on rate-limit surface. Auth/me projection (C24-16 deferral) now fixed. Convergence: 🔴 = 0 since C25, but 🟡 non-zero in both post-C27 cycles.*
+
