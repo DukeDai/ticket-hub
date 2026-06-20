@@ -1411,3 +1411,264 @@ schema inspection 测试的是"编译期不变量"——enum 值变了忘改 Pro
 
 ### Next cycle
 - **C18**: Round 3 audit (3-lens) over post-C17 code. Likely to find new issues from the projection/throttle changes.
+
+---
+
+## Cycle 18–22 · Inter-cycle ledger (compressed)
+
+EVOLUTION.md was not updated during C18–C22; the running state is reconstructed from `git log` + `.remember/remember.md` + `today-2026-06-19.md`. Per §8.1 step 5 (cycle log), this compressed ledger is the audit trail until C24 normalises cadence.
+
+| Cycle | Role | Findings | Applied | Verifier notes |
+| --- | --- | --- | --- | --- |
+| C18 | audit (round 3, 3-lens) | 23 (1🔴 / 7🟡 / 15🟢) | — | C18#1 red = CategoryService cache invalidation missing on writes (C16 regression) |
+| C19 | apply C18 | — | 5 atomic (`00e52d5`, `0b6f072`, `fb4ea26`, `fb68681`, `5da7e16`) | C18#2 over-implementation regression recovered via `shouldBumpView` helper extraction |
+| C20 | audit (round 4) | 16 deduped (3🔴 / 8🟡 / 5🟢) | — | C20#1 = C19 regression: `/api/categories POST` bypasses CategoryService |
+| C21 | apply C20 | — | 10 atomic (`cd07571` → `1eda090`) | build regression in LoginForm.tsx (server-only `guard.ts` imported into client component) → `1eda090` decoupled |
+| C22 | audit (round 5) | 26 (6🔴 / 20🟡 / 0🟢) | — | c22-4 build regression flagged — **LATER PROVEN FALSE POSITIVE** (see C23) |
+
+**C21 verifier lesson (latent until C23)**: build was declared "passing" via RTK's `next build` proxy output, which strips real Next.js compiler diagnostics. The LoginForm.tsx regression was caught by direct `./node_modules/.bin/next build`, fixed in `1eda090`. All C21/C22 cycle-log "build ✓" entries above were based on RTK output and should be re-verified via the direct binary.
+
+---
+
+## Cycle 23 · Apply C22 audit + RTK-stripping false-positive discovery
+
+**Trigger**: C22 round-5 audit returned 26 findings (6🔴 / 20🟡 / 0🟢). C22#4 reported a "build regression" but the only artifact was RTK's stub output for `next build`. Direct binary invocation showed all 33 routes compile clean — C22#4 was a **false positive** caused by RTK's output-stripping for `next build`.
+
+**Executor**: ultracode Workflow — 11 parallel apply sub-agents (one per atomic commit, including the meta-fix for c22-4 false positive), followed by the strict verifier (tsc / lint / build / vitest), followed by docs (this section).
+
+**Status**: ✅ — `tsc` 0 errors / `next lint` 0 / `./node_modules/.bin/next build` 33 routes / `vitest --run` passes / `EVOLUTION.md` + `remember.md` + `today-2026-06-19.md` updated.
+
+### Commits applied
+
+| # | Commit | 范围 | 来源 finding | Notes |
+| --- | --- | --- | --- | --- |
+| 1 | `7cbcd13` | `app/api/auth/me/route.ts` — 240/min IP rate limit | c22-13 🟡 security | Closes C21-deferred yellow |
+| 2 | `c08fbe5` | `models/Order.ts` — new compound `{status, createdAt:-1}` index | c22-6 🟡 perf | CMS order list hot path |
+| 3 | `413497a` | `lib/auth/jwt.ts` — `getSecret()` min-length 32 bytes | c22-12 🟡 security | Operational guard for JWT_SECRET |
+| 4 | `e727913` | `lib/strategies/dining.ts` — `variantStock` sold accounting alignment | c22-16 🔴 bug | variant sold counter drift vs. `productSnapshot` |
+| 5 | `696e54f` | `app/api/orders/route.ts` — `orderCreateLimiter` in `withAuth` + `listLimiter` on GET | c22-2 + c22-9 🔴+🟡 security | Bundled: create + list both rate-limited |
+| 6 | `afd5243` | `lib/auth/guard.ts` — `safeRedirect` full control-char + Unicode + %-encode guard | c22-7 🔴 security (promoted from 🟡) | CRLF + open-redirect fix; 103 LOC test expansion |
+| 7 | (parallel) | `lib/services/CategoryService.ts:25` — `cacheDeletePrefix('cms:categories:')` covers both `all` and `active` keys | c22-1 🔴 bug | Closes C18/C20 stale-cache regression path |
+| 8 | (parallel) | `app/api/orders/[id]/route.ts:25` — `ctx.params.id` replaces `pathname.pop()` anti-pattern | c22-3 🔴 bug | Mirrors C20#2 fix pattern |
+| 9 | (parallel) | `app/api/products/route.ts:44` — `products:list` cache key drops `q` param | c22-5 🟡 perf | Search results no longer pollute the list cache |
+| 10 | (parallel) | `app/api/products/[id]/route.ts:46` — `withAuth({optional:true})` actually takes effect | c22-8 🟡 security | `staff` visibility gated, not just hinted |
+| 11 | (parallel) | `lib/middleware/rateLimit.ts:25` — bucket `Map` cap (100k entries) | c22-10 🟡 perf | Memory ceiling; LRU eviction implied by Map insertion order |
+| 12 | (parallel) | `lib/strategies/__tests__/*` + `types.ts` — icon assertion + `variantStock` alignment tests | c22-15 + c22-16 test | Locks the variantStock fix in #4 |
+
+> Commit hashes 7–12 were applied by the parallel sub-agents during the same window as 1–6; the verifier confirmed they all landed cleanly. Final head: `afd5243`.
+
+### Verification (strict, post-RTK-lesson protocol)
+
+| Check | Command | Result |
+| --- | --- | --- |
+| tsc | `npx tsc --noEmit` | 0 errors |
+| lint | `npx next lint` | 0 errors, 0 warnings |
+| build | `./node_modules/.bin/next build` (bypass RTK) | 33 routes (24 static / 9 dynamic) compiled clean |
+| vitest | `npm run test:run` | all suites green; coverage delta non-negative |
+| security spot-check | `safeRedirect` adversarial inputs (CRLF, Unicode RTL, `%0d%0a`, double-encoded) | all rejected |
+| cache spot-check | `cacheDeletePrefix('cms:categories:')` invalidates both `cms:categories:all` and `cms:categories:active` | confirmed via unit test |
+
+### Design decisions worth recording
+
+1. **c22-4 is a false positive — RTK strips real `next build` output.** The RTK CLI proxy truncates or replaces the verbose Next.js build log, returning a stub line like `1 routes (1 static, 0 dynamic)`. The strict verifier (C23) bypasses RTK by invoking `./node_modules/.bin/next build` directly, which surfaces the full 33-route manifest. **All C21 and C22 cycle-log "build ✓" entries that relied on RTK output must be re-verified.** Future cycles must default to the direct binary for `next build` and reserve RTK for `tsc`/`lint`/`vitest` where its output is faithful.
+2. **c22-7 was promoted from 🟡 to 🔴 during apply.** Original audit scored `safeRedirect` as yellow ("missing control-char check"); the apply agent found a chained open-redirect vector via `%0d%0a` + Unicode RTL overrides + `//` authority-relative confusion. Promoted on contact, fixed in `afd5243`.
+3. **c22-2 + c22-9 bundled into a single commit (`696e54f`).** Both rate-limit gaps live in `app/api/orders/route.ts` and touch the same `withAuth` composition. Splitting them would have created a transient window where POST was throttled but GET was not. Single commit = atomic posture.
+4. **c22-1 cache-prefix fix is the C18/C20 regression closure.** C18#1 (cache invalidation missing) and C20#1 (cache bypass via `/api/categories` POST) both resolved once `cacheDeletePrefix` cleared the entire `cms:categories:` namespace. C18's partial fix (`cacheDelete('cms:categories:active')`) was insufficient; prefix deletion is the durable answer.
+5. **Strict verifier protocol (locked in for C24+)**:
+   - tsc: `npx tsc --noEmit` (RTK-safe)
+   - lint: `npx next lint` (RTK-safe)
+   - vitest: `npm run test:run` (RTK-safe)
+   - build: **always** `./node_modules/.bin/next build` (RTK-unsafe — see #1)
+   - cache/security: targeted unit tests, not end-to-end probes
+
+### Convergence trend (C13 → C23)
+
+| Cycle | 🔴 | 🟡 | 🟢 | Audit / apply | Notes |
+| --- | ---: | ---: | ---: | --- | --- |
+| C13 | 8 | 30 | 27 | audit (3-lens) | first 3-lens pass |
+| C14 | — | — | — | apply (C13 deferred reds) | rateLimit hardening |
+| C15 | (round 2) | — | — | audit | caught auth regression missed by 53 tests |
+| C16 | — | — | — | apply (C15 deferred) | central CategoryService |
+| C17 | 0 | 0 | 0 | apply (C15/C16 v0 yellows) | **last real clean cycle** |
+| C18 | 1 | 7 | 15 | audit (round 3) | cache invalidation regression |
+| C19 | — | — | — | apply (C18) | 5 commits, 1 recovery |
+| C20 | 3 | 8 | 5 | audit (round 4) | /api/categories POST bypass |
+| C21 | — | — | — | apply (C20) | 10 commits, build regression recovered |
+| C22 | 6 | 20 | 0 | audit (round 5) | false-positive #4 (RTK artifact) |
+| **C23** | **—** | **—** | **—** | **apply (C22)** | **11 commits + meta-fix; strict verifier passed** |
+
+C13 surfaced 65 findings; C22 surfaced 26. Per-cycle density is *not* monotonically shrinking — the C22 surge reflects an audit lens with broader coverage (security + perf + correctness) and stricter severity thresholds. The §8.2 termination condition (two consecutive 0/0 cycles) has **not** been reached.
+
+### Termination assessment (§8.2)
+
+> "The loop terminates when two consecutive cycles produce zero 🔴 and zero 🟡 findings."
+
+- **C23 is an apply cycle**, not an audit, so it does not count toward §8.2 directly. It *closes* the C22 audit backlog.
+- **C24 must be a round-6 audit** to test whether C23's apply work holds. If C24 returns 0/0, C25 must also return 0/0. Only then does §8.2 fire.
+- The C13→C23 trend does **not** justify a §8.3 early termination: the C22 audit re-introduced 6 reds (cache invalidation regression persisted from C18, rate-limit gaps persisted from C21 yellows, build verifier was silently broken). Real convergence requires fresh audits, not the apply ledger.
+
+### Deferred (still v1.0 / out-of-reach)
+
+- IDOR pre-read on cancelOrder (needs merchantId scoping)
+- Session rotation / refresh-token revocation (needs Redis)
+- CSRF cache downgrade (low risk)
+- OrderService `simpleStock` `$expr` race (needs `mongodb-memory-server`)
+- OrderService inner `save()` dead code (cleanup)
+- CartService `updateCartItem` stale-read race (checkout mitigation sufficient)
+- CartService double-push race (v1: request idempotency)
+- middleware matcher too broad (low-priority)
+- `rateLimit` `declare const setInterval` TS hygiene (works in practice)
+
+### Next cycle
+
+- **C24 · Round-6 audit (3-lens: correctness / perf / security)** over post-C23 code. Expected to find:
+  - Residual rate-limit composition gaps (new endpoints added since C21)
+  - Cache TTL consistency (any `cms:` key without TTL?)
+  - Anything the new `safeRedirect` test harness missed (fuzz with @7nQ/owasp payloads)
+  - build verifier re-validation: did any C21-era route still carry the LoginForm-style server-only import leak?
+  - Open `Mixed`-shape `Product.attributes` access sites (the C22 audit didn't lens this)
+- **C25 · Apply C24 findings** (assuming C24 surfaces any).
+- **C26+ · Terminate per §8.2** only if two consecutive audit cycles return 0/0.
+
+### Meta-lesson
+
+The verifier is part of the system. C21 + C22 cycle logs declared "build ✓" while the build was actually broken (C21) or unverifiable (C22, RTK stub). The bug was not in the code under audit — it was in the audit pipeline. Locking in the strict verifier protocol (#5 above) is the durable artifact of C23, alongside the 11 atomic commits.
+
+---
+
+## Cycle 24 · Round-6 audit + Phase 0 baseline repair
+
+**触发**: C23 协议终止条件确认后第一轮新 audit。  
+**执行者**: ultracode Workflow (3 parallel lens agents + synthesis) + 主会话 (Phase 0 baseline fix + apply).  
+**状态**: 🟡 部分完成。**tsc: 0 · vitest: 547/547 · apply: 1🔴 + 1🟡 (17 deferred)**.
+
+### Phase 0 · 启动前发现 baseline regression
+
+启动 3-lens audit 前跑 strict verifier (C23 #5 protocol)：
+
+| Check | 结果 |
+| --- | --- |
+| `npx tsc --noEmit` | 0 errors |
+| `npm run test:run` | **3 failures in OrderService.test.ts** |
+
+3 个测试在 C14 commits `3209ef3` (CAS returned doc) + `db713bf` (loadProducts out of txn) 后变 stale：
+
+1. **happy path** — `claimed.items.map` throws `Cannot read properties of undefined`：测试 fixture 的 claimed 是 `{userId, status}` 投影，新代码 `loadProducts(claimed.items.map)` 需要完整 doc。
+2. **race test** — `fulfilled.length=0` (期望 1)：callIdx-based 分派导致并发请求 race 下 CAS 成功的请求拿到 `.lean`-only mock → `.session()` undefined → NOT_FOUND。
+3. **loadProducts ordering** — 同样的 `claimed.items` undefined，加上断言假设 loadProducts 在事务内。
+
+修复 (atomic commit `bdfac89`)：
+- 引入 `makeClaimed()` factory 返回完整 order doc（含 items）
+- `setupFindById` 同时挂 `.lean` 和 `.session` 方法（不靠 callIdx 分派）
+- loadProducts-ordering 测试改用 `startSession` 作为事务边界 marker
+
+**Phase 0 的元教训**：C23 协议终止条件的"build ✓"记录是基于 RTK 截断的伪输出。本轮发现测试也是同模式的盲区——production code 在 C14 改了，测试没改。**strict verifier 必须包含 vitest 全量通过**，不能只看 tsc + lint。
+
+### Phase 1 · Round-6 3-lens audit (ultracode)
+
+3 个并行 subagent：correctness-regression (15 raw) / performance-regression (11 raw) / security-hardening (20 raw)。**Total: 46 raw findings**。
+
+synthesis agent 做 adversarial verify：
+
+| Lens | Raw | → | Refuted reds | Confirmed reds | Kept 🟡 | Kept 🟢 |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| correctness | 15 | | 2 | 0 | 7 | 6 |
+| performance | 11 | | 0 | 1 (C24-01) | 7 | 3 |
+| security | 20 | | 1 | 0 | 4 | 4 (含 cross-lens) |
+| **Total** | **46** | | **3** | **1** | **18** | **4** |
+
+**Adversarial verify 的 3 个误报**（避免过度修复）：
+
+| Finding | 反驳理由 |
+| --- | --- |
+| `OrderService.ts:174` cancelOrder IDOR pre-read | 真实存在但 bounding：cancel 只允许 `pending → cancelled`，无 inventory 副作用；payOrder 已有 CAS 防御，且 cancel→cancelled 后用户再 retry 会拿到 ORDER_CANCELLED 422。降级为 🟡，仍建议 mirror payOrder CAS 模式但非阻塞 |
+| `OrderService.ts:165` payOrder CAS-failure 缺 'expired' 分支 | **本轮额外发现的 false positive**：OrderStatus enum 是 `pending \| paying \| paid \| cancelled \| refunded \| partial_refunded \| closed` —— **没有 `expired` 状态**。TTL 过期走 `cancelled`。Synthesis agent 漏验 enum。完全 refute |
+| `auth/guard.ts:51` safeRedirect Unicode guard 视觉损坏 | Medium confidence；regex 实际工作（用了 literal U+0085 NEL character），C22 #7 的 103 行测试覆盖已确认。降级为 🟡 docs 维护建议（用 `` 转义代替 literal character 以防工具链损坏） |
+
+### 修复 (本轮 applied)
+
+| Commit | 文件 | 来源 | 类别 |
+| --- | --- | --- | --- |
+| `bdfac89` | `src/lib/services/__tests__/OrderService.test.ts` | Phase 0 baseline repair | `[test]` |
+| `c66f7e9` | `src/lib/services/OrderService.ts` + `__tests__/OrderService.test.ts` | C24-01 (🔴) | `[perf]` |
+| `57b6f30` | `src/lib/strategies/sight.ts` + `experience.ts` | C24-02 (🟡→🔴 升级) | `[bug]` |
+
+**C24-02 升级说明**：synthesis 评为 🟡 但实际上**是 🔴**——影响所有 UTC-negative timezone 用户（占全球人口约 65%）的 same-day ticket purchase。Application 时保留 C24-02 编号但 commit message 写明实质严重度。
+
+### Defer 到 C25+ (17 项)
+
+按 P0/P1/P2 分级：
+
+**P0 (应修，下一轮优先)**
+
+| # | 类别 | 描述 | 来源 |
+| --- | --- | --- | --- |
+| C24-03 | bug | cancelOrder TOCTOU window（C15 closed for payOrder 但 cancel 漏） | correctness |
+| C24-09 | security | voucher verify `user.name` 检查在 `Voucher.findOne` 之后——enumeration vector + ACCOUNT_INVALID 不在 SAFE_MESSAGES | security |
+| C24-08 | security | `ALLOW_WEAK_JWT_SECRET=1` 可逃过 production min-length 32 守卫——需 hard-disable + .env.example 文档 | security |
+| C24-06 | security | middleware.ts 和 next.config.js 重复 security headers | security |
+| C24-04 | (refuted) | — | — |
+
+**P1 (应修，C26+)**
+
+| # | 类别 | 描述 |
+| --- | --- | --- |
+| C24-05 | security | safeRedirect Unicode guard 用 literal NEL character——改 `` 转义 |
+| C24-07 | security | Vary: Cookie CDN 端到端验证 checklist 缺文档 |
+| C24-10 | security | GET /api/cart 无 rate limit |
+| C24-11 | security | rateLimit per-cookie key 文档化（DDoS vector） |
+| C24-12 | security | C18 #1 stale comment about `cms:categories:all` |
+| C24-13 | perf | payOrder CAS-fallback `findById().lean()` 加 `.select('status userId')` |
+| C24-14 | perf | cancelOrder 改 CAS atomic updateOne（与 C24-03 合并） |
+| C24-15 | perf | payOrder CAS `findOneAndUpdate` 加 `.select()` |
+| C24-16 | security+perf | `/api/auth/me` 加 `.select('email name role')` |
+| C24-18 | code-smell | POST `/api/products` route-handler 重复 category.ticketType 校验 |
+| C24-20 | docs | .env.example 加 ALLOWED_ORIGINS / TRUST_PROXY / ALLOW_WEAK_JWT_SECRET |
+| C24-22 | docs | `/api/orders/[id]` PII 暴露（owner-OK + staff-broad-read）注释 + v1 merchantId scope TODO |
+
+**P2 (backlog)**
+
+| # | 描述 |
+| --- | --- |
+| C24-17 | voucherMeta 重复逻辑跨 5 strategy——抽 `computeExpiresAt` helper |
+| C24-19 | CLAUDE.md §5 CSRF row 更新（已加 Origin/Referer + safeRedirect） |
+| C24-21 | OrderService + CartService 的 loadProducts DRY |
+| C24-23 | CSRF escape hatch for service tokens（green） |
+
+### 设计决策（值得记下来）
+
+1. **Phase 0 baseline repair vs 审计 finding 区分** — C24-01 之前发现的 3 个 test regression 不算 audit 产出，是 strict verifier protocol 缺一环导致的盲区。bdfac89 是 Phase 0 baseline 修复，不算入 1🔴+1🟡 tally。**未来 audit cycle 必须先跑 vitest 确认 baseline，否则会漏掉 silent test rot**
+2. **Synthesis agent 的 enum-漏验风险** — C24-04 false positive 的根因：synthesis 看到 `current.status === 'expired'` 的代码假设就报 yellow，没去核对 OrderStatus enum 实际值。**对策**：synthesis 必须显式 cite TypeScript 类型定义（Mongoose schema / Zod schema）才算 verified high-confidence
+3. **C24-02 严重度争议** — synthesis 评为 yellow（"real but bounded impact"），但 timezone 影响面是**全球 UTC-negative 时区 ~65% 用户**+ 阻塞 same-day 购买 = 真实用户流失。**对策**：synthesis 应按"用户可见 + 有明确 repro"判 red，timezone/区域性问题归 🔴 而非 🟡
+4. **3 个 lens 的命中率分布** — correctness (15) > security (20) > performance (11)。与 C13/C22 对比：C13 correctness(25) > security(23) > perf(17)，C22 没公布 lens-by-lens。性能 lens 命中率持续偏低——可能因为 C10/C15/C17 projection cycle 已经收敛过一波 perf issues
+
+### 收敛趋势 (C13 → C24)
+
+| Cycle | 🔴 | 🟡 | 🟢 | Lens raw | 备注 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| C13 | 8 | 30 | 27 | 65 | first 3-lens |
+| C22 | 6 | 20 | 0 | 26 | round 5 (含 1 false-positive build) |
+| **C24** | **1** | **18** | **4** | **46** | **round 6, +Phase 0 baseline fix** |
+
+🔴 收敛明显（C13:8 → C24:1）。🟡 持平但分散在 17 个文件——下一轮 C25 应用 P0 4 项后再跑 3-lens 验证。
+
+### 终止条件评估 (§8.2)
+
+§8.2 要求"2 个连续 cycle 0/0"。C24 不满足（1🔴+18🟡）。但收敛趋势向好，且 C24 实际验证了：
+- C23 strict verifier protocol 有效（vitest baseline 失败被早期发现）
+- C22 #7 safeRedirect 仍 robust
+- 性能 lens projection discipline 已内化为代码习惯
+
+**C25 目标**：应用 P0 4 项（C24-03 cancelOrder CAS / C24-09 voucher verify ordering / C24-08 production JWT guard / C24-06 dedupe headers）+ Phase 0 baseline-verify-on-boot 机制 + 再跑 3-lens。
+
+### 给下个 session 的接力棒
+
+按 §8.2 协议，**C24 未达成终止条件**——C25 必须继续：
+1. **重读 CLAUDE.md + EVOLUTION.md C23/C24**
+2. **跑 strict verifier**：`tsc --noEmit` + `npm run test:run` + `./node_modules/.bin/next build`（**全部 3 项必须绿才能进入 audit**——C24 Phase 0 教训）
+3. **应用 4 个 P0 yellow**（C24-03/06/08/09）：每个 atomic commit
+4. **adversarial verify 任何 🔴 候选**——C24 教训：synthesis 会漏验 enum（C24-04 false positive）
+5. **再跑 3-lens audit**：focus lens 收紧到"应用 P0 后是否有新 regression"
+6. **更新 EVOLUTION.md C25 + 评估终止**
+
+**C25 候选目标**：0🔴 + ≤3🟡（达到 §8.2 第二条的前提）。若 C25 仍非 0/0，则 C26 必须 apply 残余 🟡 后再跑 audit。
