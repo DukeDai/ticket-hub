@@ -38,39 +38,46 @@ export const GET = withValidation(
       extraFilter,
     });
 
-    // cacheSWR：列表查询 30s TTL，过期后 60s 内仍返回旧值并后台刷新。
+    // 列表查询执行器：直接走 DB（用于搜索路径 'q'，缓存被绕过）。
+    const runQuery = async () => {
+      await connectDB();
+      const [items, total] = await Promise.all([
+        Product.find(filter)
+          .select(
+            'title slug images priceInCents originalPriceInCents location.city salesCount ticketType'
+          )
+          .sort(sortObj)
+          .skip(skip)
+          .limit(limit)
+          .populate('categoryId', 'name slug ticketType')
+          .lean(),
+        Product.countDocuments(filter),
+      ]);
+      return pageResult(items, total, page, pageSize);
+    };
+
+    // cacheSWR：列表查询 TTL 短，搜索 'q' 直接绕过缓存（避免每个搜索词产生独立 cache key
+    // 导致 100% miss）。结构化列表仅按 sort/page/pageSize 等字段作为 key 命中。
     // 写入路径（POST/PUT/DELETE products）在 service 层 cacheDelete 同步失效。
-    // 这里 status 默认 'active' 是公开接口的高频路径，适合缓存。
-    const cacheKey = `products:list:${JSON.stringify({
-      page,
-      pageSize,
-      sort,
-      q,
-      categoryId,
-      ticketType,
-      city,
-      status: status ?? 'active',
-    })}`;
-    const result = await cacheSWR(
-      cacheKey,
-      async () => {
-        await connectDB();
-        const [items, total] = await Promise.all([
-          Product.find(filter)
-            .select(
-              'title slug images priceInCents originalPriceInCents location.city salesCount ticketType'
-            )
-            .sort(sortObj)
-            .skip(skip)
-            .limit(limit)
-            .populate('categoryId', 'name slug ticketType')
-            .lean(),
-          Product.countDocuments(filter),
-        ]);
-        return pageResult(items, total, page, pageSize);
-      },
-      { ttlMs: 30_000, staleMs: 60_000 }
-    );
+    let result;
+    if (q) {
+      // 搜索路径：不缓存（不同 q 命中不同结果，且 key 不应包含 q 防止冲突）。
+      result = await runQuery();
+    } else {
+      const cacheKey = `products:list:${JSON.stringify({
+        page,
+        pageSize,
+        sort,
+        categoryId,
+        ticketType,
+        city,
+        status: status ?? 'active',
+      })}`;
+      result = await cacheSWR(cacheKey, runQuery, {
+        ttlMs: 15_000,
+        staleMs: 30_000,
+      });
+    }
     return NextResponse.json(result);
   }
 );
