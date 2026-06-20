@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import { User } from '@/models';
 import { hashPassword } from '@/lib/auth/password';
@@ -27,7 +27,8 @@ export const POST = withValidation(
 
     const { email, password, name, phone } = body;
     // 密码强度已在 RegisterSchema 中 refine（isStrongPassword），无需重复校验。
-    const exists = await User.findOne({ email }).lean();
+    // C30 perf: 只需 existence boolean，换 .exists() 省 wire 开销。
+    const exists = await User.exists({ email });
     if (exists) {
       // 静默：与注册成功的响应形态对齐，避免邮箱枚举
       return NextResponse.json({
