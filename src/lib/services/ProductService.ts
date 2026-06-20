@@ -129,7 +129,8 @@ export async function updateProduct(
     throw new AppError('INVALID_ID', 'Invalid product id', 400);
   }
   if (input.categoryId) {
-    const cat = await Category.findById(input.categoryId).lean();
+    // C30 perf: updateProduct 只读 cat.ticketType，加 select 减少 wire 开销。
+    const cat = await Category.findById(input.categoryId).select('ticketType').lean();
     if (!cat) throw new AppError('CATEGORY_NOT_FOUND', 'Category not found', 404);
     if (input.ticketType && cat.ticketType !== input.ticketType) {
       throw new AppError('TICKET_TYPE_MISMATCH', 'ticketType mismatch with category', 422);
@@ -186,7 +187,8 @@ export async function listProducts(query: ListProductQuery) {
       .sort(sortObj)
       .skip(skip)
       .limit(limit)
-      .populate('categoryId', 'name slug ticketType')
+      // C30 perf: remove dead populate——listProducts 返回的 items 里 categoryId 是 raw ObjectId，
+      // populate 是死代码；/api/products/[id] 传 explicit select 不走此处；前端 slug 页用自己独立的 query。
       .lean(),
     Product.countDocuments(filter),
   ]);

@@ -22,7 +22,7 @@ const limiter = rateLimit({ windowMs: 60_000, max: 10 });
 export const POST = withValidation(
   { body: RegisterSchema },
   async ({ req, body }) => {
-    limiter(req as NextRequest);
+    limiter(req);
     await connectDB();
 
     const { email, password, name, phone } = body;

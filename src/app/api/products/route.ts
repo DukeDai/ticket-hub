@@ -91,7 +91,8 @@ export const POST = withAuth(
   withValidation({ body: CreateProductSchema }, async ({ body, req }) => {
     await connectDB();
     // 业务校验：ticketType 必须与 category 一致
-    const cat = await Category.findById(body.categoryId).lean();
+    // C30 perf: 只读 ticketType，加 select 减少 wire 开销。
+    const cat = await Category.findById(body.categoryId).select('ticketType').lean();
     if (!cat) throw new AppError('CATEGORY_NOT_FOUND', 'Category not found', 404);
     if (cat.ticketType !== body.ticketType) {
       throw new AppError(

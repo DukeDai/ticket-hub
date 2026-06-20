@@ -267,7 +267,8 @@ export async function updateCartItem(
   const userObjId = new mongoose.Types.ObjectId(userId);
 
   // Step 1：定位 item 在 cart.items 中的下标
-  const current = await Cart.findOne({ userId: userObjId }).lean();
+  // C30 perf: 只读 items 字段，减少 wire 开销。
+  const current = await Cart.findOne({ userId: userObjId }).select('items').lean();
   if (!current) throw new AppError('ITEM_NOT_FOUND', 'Cart item not found', 404);
   const idx = current.items.findIndex(
     (i: ICartItem) => String(i._id) === itemId

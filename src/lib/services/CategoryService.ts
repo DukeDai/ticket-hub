@@ -6,12 +6,14 @@ import type { CreateCategoryInput } from '@/lib/validation/schemas';
 
 export async function listActiveCategories() {
   await connectDB();
-  return Category.find({ isActive: true }).sort({ sortOrder: 1, name: 1 }).lean();
+  // C30 perf: 与 listActiveCategoriesForUI 投影对齐，减少 wire 开销。
+  return Category.find({ isActive: true }).select('name slug ticketType sortOrder').sort({ sortOrder: 1, name: 1 }).lean();
 }
 
 export async function listAllCategories() {
   await connectDB();
-  return Category.find({}).sort({ sortOrder: 1 }).lean();
+  // C30 perf: CMS admin 列表只需 UI 渲染字段。
+  return Category.find({}).select('name slug ticketType sortOrder').sort({ sortOrder: 1 }).lean();
 }
 
 export async function createCategory(input: CreateCategoryInput) {

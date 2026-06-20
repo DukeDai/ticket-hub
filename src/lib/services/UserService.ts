@@ -15,7 +15,8 @@ export async function registerUser(input: {
   phone?: string;
 }) {
   await connectDB();
-  const exists = await User.findOne({ email: input.email }).lean();
+  // C30 perf: 只需 existence boolean，换 .exists() 省 wire 开销。
+  const exists = await User.exists({ email: input.email });
   if (exists) throw new AppError('EMAIL_TAKEN', 'Email already registered', 409);
   const passwordHash = await hashPassword(input.password);
   const user = await User.create({

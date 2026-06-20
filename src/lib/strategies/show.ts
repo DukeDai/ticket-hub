@@ -1,6 +1,7 @@
 import type { IProductStrategy, PricingContext, StockCheckResult, QuoteResult, VoucherMeta } from './types';
 import { variantStock } from './types-helpers';
 import { AppError } from '@/lib/middleware/withError';
+import { computeExpiresAt } from './voucher-helpers';
 
 /**
  * 演出票策略：
@@ -36,9 +37,12 @@ export const ShowStrategy: IProductStrategy = {
   voucherMeta(_ctx, _paidAt): VoucherMeta {
     // variant.name 一般为 "2026-06-20 A 区"
     const badge = _ctx.variant?.name;
+    // C30 fix: variant.validTo 优先级最高（演出场次截止日期）；
+    // 其次尝试 product.validTo；最后兜底走 computeExpiresAt（处理 validDaysAfterPurchase）。
+    // 之前 show 永远不会触发 validDaysAfterPurchase，与 sight/dining/experience 不一致。
     let expiresAt: Date | undefined;
     if (_ctx.variant?.validTo) expiresAt = new Date(_ctx.variant.validTo);
-    else if (_ctx.product.validTo) expiresAt = new Date(_ctx.product.validTo);
+    else expiresAt = computeExpiresAt(_ctx.product, _paidAt);
     return { badge, expiresAt };
   },
 };

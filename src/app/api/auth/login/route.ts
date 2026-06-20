@@ -15,7 +15,7 @@ const limiter = rateLimit({ windowMs: 60_000, max: 10 });
 export const POST = withValidation(
   { body: LoginSchema },
   async ({ req, body }) => {
-    limiter(req as NextRequest);
+    limiter(req);
     await connectDB();
     const { email, password } = body;
     // 必须 select passwordHash 才能比较
