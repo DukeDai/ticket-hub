@@ -59,7 +59,14 @@ const validated = withValidation({ body: Schema }, async ({ body, req }) => {
   const voucher = await Voucher.findOne({ code: body.code });
   if (!voucher) throw new AppError('NOT_FOUND', 'Voucher not found', 404);
   if (voucher.status !== 'active') {
-    throw new AppError('INVALID_STATUS', `Voucher is ${voucher.status}`, 422);
+    // C25-04 (yellow): 静态文案替代动态 status interpolation，避免 enumeration。
+    // 原 throw \`Voucher is ${voucher.status}\` 把 voucher.status 拼到错误消息
+    // → 已知 code 的 attacker 可探测 voucher 真实状态（used / cancelled /
+    //   refunded 各返回不同消息），是 voucher 状态侧信道。
+    // 修法：所有非 active 状态走同一静态文案。
+    // 注意：EXPIRED（line 67 单独抛）仍然区分"已过期"——因为过期是带时间
+    // 维度的状态，不属于"已知 code 探测"威胁面。
+    throw new AppError('INVALID_STATUS', 'Voucher is no longer valid', 422);
   }
   if (voucher.expiresAt && voucher.expiresAt.getTime() < Date.now()) {
     voucher.status = 'expired';
