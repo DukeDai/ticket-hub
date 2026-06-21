@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { connectDB } from '@/lib/db';
 import mongoose from 'mongoose';
 import { Product, Category } from '@/models';
+import { withError } from '@/lib/middleware/withError';
 import { withValidation } from '@/lib/middleware/withValidation';
 import { withAuth } from '@/lib/middleware/withAuth';
 import { AppError } from '@/lib/middleware/withError';
@@ -15,84 +16,78 @@ import type { AccessTokenPayload } from '@/lib/auth/jwt';
  * GET /api/products
  *   公开接口：默认只返回 status='active' 的商品。
  *   staff 用户按 merchantId 过滤；admin 可见全部（包括其它商户商品）。
+ *   withAuth({ optional: true }) + withValidation 签名不兼容，所以 GET 用 withError + 内联鉴权。
  *
  * POST /api/products
  *   仅 admin/staff：创建商品（HOF 链：withError → withAuth → withValidation）。
  */
+import { AUTH_COOKIE } from '@/lib/auth/session';
+import { verifyAccessToken } from '@/lib/auth/jwt';
 
-export const GET = withAuth(
-  { optional: true },
-  withValidation(
-    { query: ListProductQuery },
-    async ({ query, req }) => {
-      // withAuth({ optional: true }) attaches user to req
-      const user = (req as NextRequest & { user?: AccessTokenPayload | null }).user ?? null;
-      const { page, pageSize, sort, q, categoryId, ticketType, city, status } = query;
-      const extraFilter: Record<string, unknown> = { status: status ?? 'active' };
-      // categoryId 必须在查询时转 ObjectId，否则 { categoryId, status, salesCount } 复合索引无法命中
-      if (categoryId) extraFilter.categoryId = new mongoose.Types.ObjectId(categoryId);
-      if (ticketType) extraFilter.ticketType = ticketType;
-      if (city) extraFilter['location.city'] = city;
+export const GET = withError(async (req: NextRequest) => {
+  // Inline optional auth (equivalent to withAuth({ optional: true }))
+  const token = req.cookies.get(AUTH_COOKIE)?.value;
+  let user: AccessTokenPayload | null = null;
+  if (token) {
+    try { user = await verifyAccessToken(token); } catch { /* ignore */ }
+  }
+  const params = req.nextUrl.searchParams;
+  const page = Math.max(1, Number(params.get('page') ?? 1));
+  const pageSize = Math.min(100, Math.max(1, Number(params.get('pageSize') ?? 20)));
+  const sort = params.get('sort') ?? undefined;
+  const q = params.get('q') ?? undefined;
+  const categoryId = params.get('categoryId') ?? undefined;
+  const ticketType = params.get('ticketType') ?? undefined;
+  const city = params.get('city') ?? undefined;
+  const status = (params.get('status') as 'draft' | 'active' | 'offline') ?? 'active';
 
-      // RBAC：staff 按 merchantId 过滤；admin 和未登录用户看到全部
-      if (user && user.role === 'staff' && user.merchantId) {
-        extraFilter.merchantId = new mongoose.Types.ObjectId(user.merchantId);
-      }
+  const extraFilter: Record<string, unknown> = { status };
+  if (categoryId) extraFilter.categoryId = new mongoose.Types.ObjectId(categoryId);
+  if (ticketType) extraFilter.ticketType = ticketType;
+  if (city) extraFilter['location.city'] = city;
 
-      const { skip, limit, filter, sort: sortObj } = buildPagination({
-        page,
-        pageSize,
-        sort,
-        q,
-        extraFilter,
-      });
+  // RBAC：staff 按 merchantId 过滤；admin 和未登录用户看到全部
+  if (user && user.role === 'staff' && user.merchantId) {
+    extraFilter.merchantId = new mongoose.Types.ObjectId(user.merchantId);
+  }
 
-      // 列表查询执行器：直接走 DB（用于搜索路径 'q'，缓存被绕过）。
-      const runQuery = async () => {
-        await connectDB();
-        const [items, total] = await Promise.all([
-          Product.find(filter)
-            .select(
-              'title slug images priceInCents originalPriceInCents location.city salesCount ticketType'
-            )
-            .sort(sortObj)
-            .skip(skip)
-            .limit(limit)
-            .populate('categoryId', 'name slug')
-            .lean(),
-          Product.countDocuments(filter),
-        ]);
-        return pageResult(items, total, page, pageSize);
-      };
+  const { skip, limit, filter, sort: sortObj } = buildPagination({
+    page,
+    pageSize,
+    sort,
+    q,
+    extraFilter,
+  });
 
-      // cacheSWR：列表查询 TTL 短，搜索 'q' 直接绕过缓存（避免每个搜索词产生独立 cache key
-      // 导致 100% miss）。结构化列表仅按 sort/page/pageSize 等字段作为 key 命中。
-      // 写入路径（POST/PUT/DELETE products）在 service 层 cacheDelete 同步失效。
-      let result;
-      if (q) {
-        // 搜索路径：不缓存（不同 q 命中不同结果，且 key 不应包含 q 防止冲突）。
-        result = await runQuery();
-      } else {
-        const cacheKey = `products:list:${JSON.stringify({
-          page,
-          pageSize,
-          sort,
-          categoryId,
-          ticketType,
-          city,
-          status: status ?? 'active',
-          // staff 用户的 merchantId 不同，缓存 key 必须区分
-          ...(user && user.role === 'staff' && user.merchantId ? { merchantId: user.merchantId } : {}),
-        })}`;
-        result = await cacheSWR(cacheKey, runQuery, {
-          ttlMs: 15_000,
-          staleMs: 30_000,
-        });
-      }
-      return NextResponse.json(result);
-    }
-  )
-);
+  const runQuery = async () => {
+    await connectDB();
+    const [items, total] = await Promise.all([
+      Product.find(filter)
+        .select(
+          'title slug images priceInCents originalPriceInCents location.city salesCount ticketType'
+        )
+        .sort(sortObj)
+        .skip(skip)
+        .limit(limit)
+        .populate('categoryId', 'name slug')
+        .lean(),
+      Product.countDocuments(filter),
+    ]);
+    return pageResult(items, total, page, pageSize);
+  };
+
+  let result;
+  if (q) {
+    result = await runQuery();
+  } else {
+    const cacheKey = `products:list:${JSON.stringify({
+      page, pageSize, sort, categoryId, ticketType, city, status,
+      ...(user && user.role === 'staff' && user.merchantId ? { merchantId: user.merchantId } : {}),
+    })}`;
+    result = await cacheSWR(cacheKey, runQuery, { ttlMs: 15_000, staleMs: 30_000 });
+  }
+  return NextResponse.json(result);
+});
 
 /**
  * POST 走 HOF 链：withAuth 先鉴权（admin/staff），withValidation 后校验 body。
@@ -102,8 +97,6 @@ export const POST = withAuth(
   { roles: ['admin', 'staff'] },
   withValidation({ body: CreateProductSchema }, async ({ body, req }) => {
     await connectDB();
-    // 业务校验：ticketType 必须与 category 一致
-    // C30 perf: 只读 ticketType，加 select 减少 wire 开销。
     const cat = await Category.findById(body.categoryId).select('ticketType').lean();
     if (!cat) throw new AppError('CATEGORY_NOT_FOUND', 'Category not found', 404);
     if (cat.ticketType !== body.ticketType) {
@@ -114,7 +107,7 @@ export const POST = withAuth(
       );
     }
     const user = (req as NextRequest & { user?: AccessTokenPayload | null }).user!;
-    const product = await createProduct(body, user.sub, (user.merchantId ?? undefined));
+    const product = await createProduct(body, user.sub, user.merchantId ?? undefined);
     return NextResponse.json({ product }, { status: 201 });
   })
 );
