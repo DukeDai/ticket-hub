@@ -1,6 +1,8 @@
+import createMiddleware from 'next-intl/middleware';
 import { NextResponse, type NextRequest } from 'next/server';
 import { logger } from '@/lib/logger';
 import { globalLimiter } from '@/lib/rate-limit';
+import { locales, defaultLocale } from '@/lib/i18n/config';
 
 /**
  * 全局 middleware：
@@ -73,7 +75,22 @@ function isOriginAllowed(req: NextRequest): boolean {
   return false;
 }
 
+// i18n routing: redirect / → /{locale} and handle locale in path
+const intlMiddleware = createMiddleware({
+  locales: [...locales],
+  defaultLocale,
+  localePrefix: 'always',
+});
+
 export function middleware(req: NextRequest) {
+  // Skip intl for /api/* routes (they handle their own locale via Accept-Language)
+  if (req.nextUrl.pathname.startsWith('/api/')) {
+    // Fall through to rate limiting and CSRF checks below
+  } else {
+    // Let next-intl handle locale routing for all other paths
+    return intlMiddleware(req);
+  }
+
   const res = NextResponse.next();
 
   // ── Rate Limiting (C33) ─────────────────────────────────────────────────────
@@ -147,5 +164,5 @@ export function middleware(req: NextRequest) {
 // CSRF/Cache-Control 都是 /api/-only，安全头由 next.config.js headers() 统一配置。
 // 缩到 `/api/:path*` 即可，省下每次页面渲染的 middleware 调度开销。
 export const config = {
-  matcher: ['/api/:path*'],
+  matcher: ['/((?!api|_next|_vercel|.*\\..*).*)', '/api/:path*'],
 };

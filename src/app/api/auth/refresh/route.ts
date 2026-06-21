@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { AUTH_COOKIE, authCookieOptions } from '@/lib/auth/session';
 import {
   signAccessToken,
@@ -20,7 +20,7 @@ import { AppError } from '@/lib/middleware/withError';
  *
  * Returns: { accessToken, refreshToken, expiresAt }
  */
-export const POST = withError(async (req) => {
+export const POST = withError(async (req: NextRequest) => {
   const authHeader = req.headers.get('authorization');
   if (!authHeader?.startsWith('Bearer ')) {
     throw new AppError('UNAUTHENTICATED', 'Missing or invalid Authorization header', 401);

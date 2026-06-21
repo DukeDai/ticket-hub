@@ -1,0 +1,85 @@
+{
+  "common": {
+    "appName": "TicketHub",
+    "loading": "Loading...",
+    "error": "Something went wrong",
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "search": "Search",
+    "noResults": "No results found"
+  },
+  "nav": {
+    "home": "Home",
+    "products": "Tickets",
+    "cart": "Cart",
+    "orders": "My Orders",
+    "profile": "Profile",
+    "login": "Login",
+    "register": "Register",
+    "logout": "Logout"
+  },
+  "home": {
+    "title": "Discover Amazing Experiences",
+    "subtitle": "Attraction tickets, show tickets, dining vouchers",
+    "featured": "Featured",
+    "popular": "Popular Attractions",
+    "recent": "Recently Added"
+  },
+  "product": {
+    "price": "Price",
+    "perPerson": "per person",
+    "bookNow": "Book Now",
+    "soldOut": "Sold Out",
+    "description": "Description",
+    "highlights": "Highlights",
+    "rules": "Terms & Conditions",
+    "validityPeriod": "Valid Period",
+    "cancellationPolicy": "Cancellation Policy"
+  },
+  "cart": {
+    "title": "Shopping Cart",
+    "empty": "Your cart is empty",
+    "total": "Total",
+    "checkout": "Checkout",
+    "removeItem": "Remove item"
+  },
+  "order": {
+    "title": "My Orders",
+    "status": {
+      "pending": "Pending Payment",
+      "paid": "Paid",
+      "used": "Used",
+      "refunded": "Refunded",
+      "cancelled": "Cancelled"
+    },
+    "payNow": "Pay Now",
+    "viewDetail": "View Details",
+    "applyRefund": "Apply for Refund"
+  },
+  "auth": {
+    "loginTitle": "Login",
+    "registerTitle": "Register",
+    "email": "Email",
+    "password": "Password",
+    "confirmPassword": "Confirm Password",
+    "forgotPassword": "Forgot password?",
+    "noAccount": "Don't have an account?",
+    "hasAccount": "Already have an account?"
+  },
+  "validation": {
+    "required": "This field is required",
+    "invalidEmail": "Invalid email format",
+    "minLength": "Must be at least {min} characters",
+    "maxLength": "Must be no more than {max} characters"
+  },
+  "errors": {
+    "notFound": "Page not found",
+    "serverError": "Server error",
+    "unauthorized": "Please log in first",
+    "forbidden": "Access denied"
+  }
+}

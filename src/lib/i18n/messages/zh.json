@@ -1,0 +1,85 @@
+{
+  "common": {
+    "appName": "票务中心",
+    "loading": "加载中...",
+    "error": "出错了",
+    "retry": "重试",
+    "cancel": "取消",
+    "confirm": "确认",
+    "save": "保存",
+    "delete": "删除",
+    "edit": "编辑",
+    "search": "搜索",
+    "noResults": "暂无结果"
+  },
+  "nav": {
+    "home": "首页",
+    "products": "门票",
+    "cart": "购物车",
+    "orders": "我的订单",
+    "profile": "个人中心",
+    "login": "登录",
+    "register": "注册",
+    "logout": "退出登录"
+  },
+  "home": {
+    "title": "发现精彩",
+    "subtitle": "精选景区门票、演出票、餐饮券",
+    "featured": "精选推荐",
+    "popular": "热门景点",
+    "recent": "最近上架"
+  },
+  "product": {
+    "price": "价格",
+    "perPerson": "人均",
+    "bookNow": "立即预订",
+    "soldOut": "已售罄",
+    "description": "详情介绍",
+    "highlights": "亮点特色",
+    "rules": "使用规则",
+    "validityPeriod": "有效期",
+    "cancellationPolicy": "退改政策"
+  },
+  "cart": {
+    "title": "购物车",
+    "empty": "购物车是空的",
+    "total": "合计",
+    "checkout": "结算",
+    "removeItem": "移除商品"
+  },
+  "order": {
+    "title": "我的订单",
+    "status": {
+      "pending": "待支付",
+      "paid": "已支付",
+      "used": "已使用",
+      "refunded": "已退款",
+      "cancelled": "已取消"
+    },
+    "payNow": "立即支付",
+    "viewDetail": "查看详情",
+    "applyRefund": "申请退款"
+  },
+  "auth": {
+    "loginTitle": "登录",
+    "registerTitle": "注册",
+    "email": "邮箱",
+    "password": "密码",
+    "confirmPassword": "确认密码",
+    "forgotPassword": "忘记密码？",
+    "noAccount": "还没有账号？",
+    "hasAccount": "已有账号？"
+  },
+  "validation": {
+    "required": "此字段必填",
+    "invalidEmail": "邮箱格式不正确",
+    "minLength": "长度不能少于 {min} 个字符",
+    "maxLength": "长度不能超过 {max} 个字符"
+  },
+  "errors": {
+    "notFound": "页面不存在",
+    "serverError": "服务器错误",
+    "unauthorized": "请先登录",
+    "forbidden": "无权访问"
+  }
+}

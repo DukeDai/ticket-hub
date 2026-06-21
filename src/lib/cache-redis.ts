@@ -56,21 +56,17 @@ function getRedisClient(): Redis {
 
 // ── cache operations ─────────────────────────────────────────────────────────
 
-/**
- * 同步尝试连接（开发环境第一调用时 Redis 可能未启动）。
- * 连接失败时返回 null，cache 操作降级为 no-op 而不抛错。
- */
 function safeClient(): Redis | null {
   const client = getRedisClient();
   if (g.__ticketRedisErr) return null;
   return client;
 }
 
-export function cacheGet<T>(key: string): T | undefined {
+export async function cacheGet<T>(key: string): Promise<T | undefined> {
   const client = safeClient();
   if (!client) return undefined;
 
-  const raw = client.get(key) as string | null;
+  const raw = await client.get(key);
   if (!raw) return undefined;
 
   let e: Entry<T>;
@@ -84,7 +80,12 @@ export function cacheGet<T>(key: string): T | undefined {
   return e.value as T;
 }
 
-export function cacheSet<T>(key: string, value: T, ttlMs: number, staleMs?: number): void {
+export async function cacheSet<T>(
+  key: string,
+  value: T,
+  ttlMs: number,
+  staleMs?: number,
+): Promise<void> {
   const client = safeClient();
   if (!client) return;
 
@@ -96,19 +97,19 @@ export function cacheSet<T>(key: string, value: T, ttlMs: number, staleMs?: numb
   };
 
   // SET key value PX ttlMs
-  client.set(key, JSON.stringify(entry), 'PX', ttlMs);
+  await client.set(key, JSON.stringify(entry), 'PX', ttlMs);
 }
 
-export function cacheDelete(key: string): void {
+export async function cacheDelete(key: string): Promise<void> {
   const client = safeClient();
   if (!client) return;
-  client.del(key);
+  await client.del(key);
 }
 
 /**
  * 按前缀删除所有匹配条目（使用 SCAN 避免阻塞）。
  */
-export function cacheDeletePrefix(prefix: string): number {
+export async function cacheDeletePrefix(prefix: string): Promise<number> {
   const client = safeClient();
   if (!client) return 0;
 
@@ -116,16 +117,18 @@ export function cacheDeletePrefix(prefix: string): number {
   let totalDeleted = 0;
 
   do {
-    // SCAN 返回 [nextCursor, keys[]]
-    const [nextCursor, keys] = client.scan(cursor, 'MATCH', `${prefix}*`, 'COUNT', 100) as [
-      string,
-      string[],
-    ];
+    const [nextCursor, keys] = (await client.scan(
+      cursor,
+      'MATCH',
+      `${prefix}*`,
+      'COUNT',
+      100,
+    )) as [string, string[]];
     cursor = nextCursor;
 
     if (keys.length > 0) {
       // UNLINK 异步删除，不阻塞
-      client.unlink(...keys);
+      await client.unlink(...keys);
       totalDeleted += keys.length;
     }
   } while (cursor !== '0');
@@ -133,11 +136,11 @@ export function cacheDeletePrefix(prefix: string): number {
   return totalDeleted;
 }
 
-export function cacheClear(): void {
+export async function cacheClear(): Promise<void> {
   const client = safeClient();
   if (!client) return;
   // 异步清空当前 db，比 FLUSHDB 更快
-  client.flushdb('ASYNC');
+  await client.flushdb('ASYNC');
 }
 
 /**
@@ -152,7 +155,7 @@ export async function cacheSWR<T>(
   const now = Date.now();
 
   if (client) {
-    const raw = client.get(key) as string | null;
+    const raw = await client.get(key);
     if (raw) {
       try {
         const e = JSON.parse(raw) as Entry<T>;
@@ -174,6 +177,6 @@ export async function cacheSWR<T>(
   }
 
   const v = await loader();
-  cacheSet(key, v, opts.ttlMs, opts.staleMs ?? opts.ttlMs * 2);
+  await cacheSet(key, v, opts.ttlMs, opts.staleMs ?? opts.ttlMs * 2);
   return v;
 }

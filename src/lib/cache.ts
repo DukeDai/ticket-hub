@@ -14,3 +14,13 @@ export {
   cacheClear as clear,
   cacheSWR as swr,
 } from './cache-redis';
+
+// 保留原始命名导出供直接调用者使用
+export {
+  cacheGet as cacheGet,
+  cacheSet as cacheSet,
+  cacheDelete as cacheDelete,
+  cacheDeletePrefix as cacheDeletePrefix,
+  cacheClear as cacheClear,
+  cacheSWR as cacheSWR,
+} from './cache-redis';

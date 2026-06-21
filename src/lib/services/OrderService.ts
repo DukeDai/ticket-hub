@@ -6,6 +6,7 @@ import { AppError } from '@/lib/middleware/withError';
 import { getStrategy } from '@/lib/strategies';
 import { ORDER_PRODUCT_PROJECTION } from '@/lib/models/projection-keys';
 import { logger } from '@/lib/logger';
+import { voucherGenerationQueue, orderConfirmationQueue, refundProcessorQueue } from '@/lib/queue';
 
 /**
  * 订单服务。
@@ -380,6 +381,39 @@ export async function payOrder(orderId: string, actor: OrderActor) {
 
       resultOrder = order.toObject();
     });
+
+    // 5) 触发异步任务（支付完成后非关键路径剥离到队列）
+    await Promise.all([
+      orderConfirmationQueue.add('send', {
+        orderId: String(orderId),
+        userId: String(resultOrder!.userId),
+        orderNo: resultOrder!.orderNo,
+      }),
+      voucherGenerationQueue.add('generate', {
+        orderId: String(orderId),
+        orderNo: resultOrder!.orderNo,
+        userId: String(resultOrder!.userId),
+        productData: productIds.map((pid) => {
+          const p = productMap.get(String(pid))!;
+          return {
+            productId: String(p._id),
+            ticketType: p.ticketType,
+            skuVariants: p.skuVariants,
+            items: resultOrder!.items
+              .filter((it: IOrderItem) => String(it.productId) === String(pid))
+              .map((it: IOrderItem) => ({
+                productId: String(it.productId),
+                variantId: it.variantId ? String(it.variantId) : null,
+                variantName: it.variantName,
+                visitDate: it.visitDate,
+                quantity: it.quantity,
+                productSnapshot: it.productSnapshot,
+              })),
+          };
+        }),
+        paidAt: String(resultOrder!.paidAt),
+      }),
+    ]);
 
     return resultOrder!;
   } catch (err) {

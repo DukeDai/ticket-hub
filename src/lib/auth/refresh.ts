@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { cacheSet, cacheGet, cacheDelete } from '@/lib/cache';
 
 /**
- * Refresh Token Store — in-memory Map backed by lib/cache.
+ * Refresh Token Store — Redis-backed (via lib/cache) with async API.
  *
  * Design:
  *  - Refresh tokens are opaque UUIDs stored server-side only.
@@ -24,7 +24,7 @@ export interface RefreshTokenEntry {
 }
 
 /** Issue a new refresh token for a user (new family). */
-export function issueRefreshToken(userId: string): string {
+export async function issueRefreshToken(userId: string): Promise<string> {
   const tokenId = randomUUID();
   const familyId = randomUUID();
   const now = Date.now();
@@ -35,23 +35,23 @@ export function issueRefreshToken(userId: string): string {
     expiresAt: now + REFRESH_TTL_MS,
   };
 
-  cacheSet(`refresh:${tokenId}`, entry, REFRESH_TTL_MS);
-  cacheSet(`refresh:family:${familyId}`, new Set([tokenId]), REFRESH_TTL_MS);
-  cacheSet(`refresh:user:${userId}`, new Set([familyId]), REFRESH_TTL_MS);
+  await cacheSet(`refresh:${tokenId}`, entry, REFRESH_TTL_MS);
+  await cacheSet(`refresh:family:${familyId}`, new Set([tokenId]), REFRESH_TTL_MS);
+  await cacheSet(`refresh:user:${userId}`, new Set([familyId]), REFRESH_TTL_MS);
 
   return tokenId;
 }
 
 /** Issue a new refresh token in the same family (rotation). Old token is revoked. */
-export function rotateRefreshToken(oldTokenId: string): string | null {
-  const oldEntry = cacheGet<RefreshTokenEntry>(`refresh:${oldTokenId}`);
+export async function rotateRefreshToken(oldTokenId: string): Promise<string | null> {
+  const oldEntry = await cacheGet<RefreshTokenEntry>(`refresh:${oldTokenId}`);
   if (!oldEntry) return null;
 
   // Revoke old token
-  cacheDelete(`refresh:${oldTokenId}`);
+  await cacheDelete(`refresh:${oldTokenId}`);
 
   // Remove from family set
-  const familySet = cacheGet<Set<string>>(`refresh:family:${oldEntry.familyId}`);
+  const familySet = await cacheGet<Set<string>>(`refresh:family:${oldEntry.familyId}`);
   familySet?.delete(oldTokenId);
 
   // Issue new token in same family
@@ -64,45 +64,45 @@ export function rotateRefreshToken(oldTokenId: string): string | null {
     expiresAt: now + REFRESH_TTL_MS,
   };
 
-  cacheSet(`refresh:${newTokenId}`, newEntry, REFRESH_TTL_MS);
+  await cacheSet(`refresh:${newTokenId}`, newEntry, REFRESH_TTL_MS);
   familySet?.add(newTokenId);
-  if (familySet) cacheSet(`refresh:family:${oldEntry.familyId}`, familySet, REFRESH_TTL_MS);
+  if (familySet) await cacheSet(`refresh:family:${oldEntry.familyId}`, familySet, REFRESH_TTL_MS);
 
   return newTokenId;
 }
 
 /** Verify and consume a refresh token — returns entry if valid, nil if revoked/expired. */
-export function consumeRefreshToken(tokenId: string): RefreshTokenEntry | null {
-  const entry = cacheGet<RefreshTokenEntry>(`refresh:${tokenId}`);
+export async function consumeRefreshToken(tokenId: string): Promise<RefreshTokenEntry | null> {
+  const entry = await cacheGet<RefreshTokenEntry>(`refresh:${tokenId}`);
   if (!entry) return null;
   if (entry.expiresAt < Date.now()) return null;
   return entry;
 }
 
 /** Revoke a single refresh token (used on logout). */
-export function revokeRefreshToken(tokenId: string): void {
-  const entry = cacheGet<RefreshTokenEntry>(`refresh:${tokenId}`);
+export async function revokeRefreshToken(tokenId: string): Promise<void> {
+  const entry = await cacheGet<RefreshTokenEntry>(`refresh:${tokenId}`);
   if (!entry) return;
 
-  cacheDelete(`refresh:${tokenId}`);
+  await cacheDelete(`refresh:${tokenId}`);
 
-  const familySet = cacheGet<Set<string>>(`refresh:family:${entry.familyId}`);
+  const familySet = await cacheGet<Set<string>>(`refresh:family:${entry.familyId}`);
   familySet?.delete(tokenId);
 }
 
 /** Revoke all tokens in a user's session family (used on account-wide logout). */
-export function revokeUserSessions(userId: string): void {
-  const familySet = cacheGet<Set<string>>(`refresh:user:${userId}`);
+export async function revokeUserSessions(userId: string): Promise<void> {
+  const familySet = await cacheGet<Set<string>>(`refresh:user:${userId}`);
   if (!familySet) return;
 
   for (const familyId of familySet) {
-    const tokenSet = cacheGet<Set<string>>(`refresh:family:${familyId}`);
+    const tokenSet = await cacheGet<Set<string>>(`refresh:family:${familyId}`);
     if (tokenSet) {
       for (const tokenId of tokenSet) {
-        cacheDelete(`refresh:${tokenId}`);
+        await cacheDelete(`refresh:${tokenId}`);
       }
-      cacheDelete(`refresh:family:${familyId}`);
+      await cacheDelete(`refresh:family:${familyId}`);
     }
   }
-  cacheDelete(`refresh:user:${userId}`);
+  await cacheDelete(`refresh:user:${userId}`);
 }
