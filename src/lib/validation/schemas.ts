@@ -197,6 +197,7 @@ export const CreateOrderSchema = z
       email: z.string().email().optional(),
     }),
     remark: z.string().trim().max(500).optional(),
+    couponCode: z.string().trim().min(4).max(32).optional(),
   })
   .superRefine((val, ctx) => {
     // 跨字段：同 productId 重复出现 → 提示用户合并到一次
@@ -213,3 +214,53 @@ export const CreateOrderSchema = z
     });
   });
 export type CreateOrderInput = z.infer<typeof CreateOrderSchema>;
+
+// ----- Coupon -----
+const CouponType = z.enum(['fixed', 'percent']);
+
+export const CreateCouponSchema = z.object({
+  code: z.string().trim().min(1).max(32).toUpperCase(),
+  type: CouponType,
+  valueInCents: z.number().int().min(1).optional(),
+  percent: z.number().int().min(1).max(100).optional(),
+  minOrderInCents: z.number().int().min(0).default(0),
+  maxTotalUses: z.number().int().min(0).default(0),
+  maxPerUser: z.number().int().min(1).default(1),
+  validFrom: z.coerce.date(),
+  validUntil: z.coerce.date(),
+  status: z.enum(['active', 'inactive']).default('active'),
+  applicableProducts: z.array(objectId).default([]),
+  applicableCategories: z.array(objectId).default([]),
+}).refine(
+  (data) => {
+    if (data.type === 'fixed' && !data.valueInCents) {
+      return false;
+    }
+    if (data.type === 'percent' && !data.percent) {
+      return false;
+    }
+    return true;
+  },
+  { message: 'valueInCents required for fixed; percent required for percent', path: ['type'] }
+);
+export type CreateCouponInput = z.infer<typeof CreateCouponSchema>;
+
+export const ValidateCouponSchema = z.object({
+  code: z.string().trim().min(1).max(32),
+  orderAmountInCents: z.number().int().min(0),
+  applicableProductIds: z.array(objectId).optional(),
+  applicableCategoryIds: z.array(objectId).optional(),
+});
+export type ValidateCouponInput = z.infer<typeof ValidateCouponSchema>;
+
+export const ApplyCouponSchema = z.object({
+  code: z.string().trim().min(1).max(32),
+  orderId: objectId,
+});
+export type ApplyCouponInput = z.infer<typeof ApplyCouponSchema>;
+
+export const ListCouponQuery = PaginationQuery.extend({
+  status: z.enum(['active', 'inactive']).optional(),
+  type: CouponType.optional(),
+});
+export type ListCouponQuery = z.infer<typeof ListCouponQuery>;
