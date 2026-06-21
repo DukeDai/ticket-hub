@@ -34,7 +34,7 @@ export const orderConfirmationWorker = new Worker<OrderConfirmationJob>(
   'order-confirmation',
   handleOrderConfirmation,
   {
-    connection: orderConfirmationQueue.Opts.connection,
+    connection: orderConfirmationQueue.opts.connection,
     concurrency: 10,
   }
 );

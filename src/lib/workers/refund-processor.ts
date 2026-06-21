@@ -146,7 +146,7 @@ export const refundProcessorWorker = new Worker<RefundProcessorJob>(
   'refund-processor',
   handleRefund,
   {
-    connection: refundProcessorQueue.Opts.connection,
+    connection: refundProcessorQueue.opts.connection,
     concurrency: 5, // 退款并发度保守一些（资金相关）
   }
 );

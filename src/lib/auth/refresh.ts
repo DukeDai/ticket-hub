@@ -18,18 +18,27 @@ const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export interface RefreshTokenEntry {
   userId: string;
+  role: 'user' | 'staff' | 'admin';
+  email: string;
+  name: string;
   familyId: string;
   createdAt: number;
   expiresAt: number;
 }
 
 /** Issue a new refresh token for a user (new family). */
-export async function issueRefreshToken(userId: string): Promise<string> {
+export async function issueRefreshToken(
+  userId: string,
+  meta: { role: 'user' | 'staff' | 'admin'; email: string; name: string }
+): Promise<string> {
   const tokenId = randomUUID();
   const familyId = randomUUID();
   const now = Date.now();
   const entry: RefreshTokenEntry = {
     userId,
+    role: meta.role,
+    email: meta.email,
+    name: meta.name,
     familyId,
     createdAt: now,
     expiresAt: now + REFRESH_TTL_MS,
@@ -59,6 +68,9 @@ export async function rotateRefreshToken(oldTokenId: string): Promise<string | n
   const now = Date.now();
   const newEntry: RefreshTokenEntry = {
     userId: oldEntry.userId,
+    role: oldEntry.role,
+    email: oldEntry.email,
+    name: oldEntry.name,
     familyId: oldEntry.familyId,
     createdAt: now,
     expiresAt: now + REFRESH_TTL_MS,

@@ -35,23 +35,23 @@ export const POST = withError(async (req: NextRequest) => {
   }
 
   // consumeRefreshToken checks revocation via in-memory store
-  const entry = consumeRefreshToken(refreshPayload.jti);
+  const entry = await consumeRefreshToken(refreshPayload.jti);
   if (!entry) {
     throw new AppError('UNAUTHENTICATED', 'Refresh token has been revoked', 401);
   }
 
   // Rotate: revoke old token, issue new one in same family
-  const newRefreshTokenId = rotateRefreshToken(refreshPayload.jti);
+  const newRefreshTokenId = await rotateRefreshToken(refreshPayload.jti);
   if (!newRefreshTokenId) {
     throw new AppError('UNAUTHENTICATED', 'Refresh token has been revoked', 401);
   }
 
-  // Issue new access token
+  // Issue new access token using stored user metadata
   const accessToken = await signAccessToken({
-    sub: refreshPayload.sub,
-    role: refreshPayload.role as 'user' | 'staff' | 'admin',
-    email: refreshPayload.email as string,
-    name: refreshPayload.name as string,
+    sub: entry.userId,
+    role: entry.role,
+    email: entry.email,
+    name: entry.name,
   });
 
   // Issue new refresh token JWT

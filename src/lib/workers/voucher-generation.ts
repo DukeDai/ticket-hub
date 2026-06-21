@@ -19,6 +19,7 @@ import { logger } from '@/lib/logger';
 import { Product, Voucher, type IProduct, type SkuVariant } from '@/models';
 import { voucherCode } from '@/lib/utils/ids';
 import { getStrategy } from '@/lib/strategies';
+import type { TicketType } from '@/models/Category';
 
 interface VoucherGenerationJob {
   orderId: string;
@@ -108,7 +109,7 @@ export const voucherGenerationWorker = new Worker<VoucherGenerationJob>(
   'voucher-generation',
   handleVoucherGeneration,
   {
-    connection: voucherGenerationQueue.Opts.connection,
+    connection: voucherGenerationQueue.opts.connection,
     concurrency: 10,
   }
 );

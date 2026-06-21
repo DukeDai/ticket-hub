@@ -70,7 +70,11 @@ export const POST = withValidation(
     });
 
     // Issue refresh token (server-side rotation store)
-    const refreshTokenId = await issueRefreshToken(userId);
+    const refreshTokenId = await issueRefreshToken(userId, {
+      role: user.role,
+      email: user.email,
+      name: user.name,
+    });
     const refreshJwt = await signRefreshToken({ sub: userId, jti: refreshTokenId });
 
     const res = NextResponse.json({

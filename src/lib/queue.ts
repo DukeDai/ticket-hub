@@ -9,6 +9,7 @@
  */
 
 import { Queue, QueueEvents, type QueueOptions } from 'bullmq';
+import type { SkuVariant } from '@/models';
 
 export const QUEUE_NAMES = {
   ORDER_CONFIRMATION: 'order-confirmation',
@@ -45,10 +46,30 @@ export const orderConfirmationQueue = new Queue<{ orderId: string; userId: strin
   createQueueOptions(QUEUE_NAMES.ORDER_CONFIRMATION)
 );
 
-export const voucherGenerationQueue = new Queue<{ orderId: string; orderNo: string; userId: string }>(
-  QUEUE_NAMES.VOUCHER_GENERATION,
-  createQueueOptions(QUEUE_NAMES.VOUCHER_GENERATION)
-);
+export const voucherGenerationQueue = new Queue<{
+  orderId: string;
+  orderNo: string;
+  userId: string;
+  productData: Array<{
+    productId: string;
+    ticketType: string;
+    skuVariants: SkuVariant[];
+    items: Array<{
+      productId: string;
+      variantId: string | null;
+      variantName?: string;
+      visitDate?: string;
+      quantity: number;
+      productSnapshot: {
+        title: string;
+        cover: string;
+        ticketType: string;
+        location?: { city?: string; address?: string };
+      };
+    }>;
+  }>;
+  paidAt: string;
+}>(QUEUE_NAMES.VOUCHER_GENERATION, createQueueOptions(QUEUE_NAMES.VOUCHER_GENERATION));
 
 export const refundProcessorQueue = new Queue<{ orderId: string; userId: string; reason?: string }>(
   QUEUE_NAMES.REFUND_PROCESSOR,
