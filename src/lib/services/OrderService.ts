@@ -28,6 +28,8 @@ export interface CreateOrderInput {
   items: CreateOrderItemInput[];
   contact: { name: string; phone: string; email?: string };
   remark?: string;
+  /** 幂等键：防止重复创建订单 */
+  idempotencyKey?: string;
   /** 默认 15 分钟过期 */
   expiresInMs?: number;
 }
@@ -111,6 +113,18 @@ export async function quoteOrder(items: CreateOrderItemInput[]) {
 }
 
 export async function createOrder(input: CreateOrderInput) {
+  // 幂等性：若客户端提供了 idempotencyKey，检查是否已有同一用户+同一 key 的订单
+  if (input.idempotencyKey) {
+    const existing = await Order.findOne({
+      userId: new mongoose.Types.ObjectId(input.userId),
+      idempotencyKey: input.idempotencyKey,
+    }).lean();
+    if (existing) {
+      logger.info(`[createOrder] idempotency hit: key=${input.idempotencyKey} userId=${input.userId}`);
+      return existing as unknown as IOrder;
+    }
+  }
+
   const { orderItems, total } = await quoteOrder(input.items);
   const expiresAt = new Date(Date.now() + (input.expiresInMs ?? 15 * 60 * 1000));
   const order = await Order.create({
@@ -121,6 +135,7 @@ export async function createOrder(input: CreateOrderInput) {
     status: 'pending',
     contact: input.contact,
     remark: input.remark,
+    idempotencyKey: input.idempotencyKey,
     expiresAt,
   });
   return order.toObject();

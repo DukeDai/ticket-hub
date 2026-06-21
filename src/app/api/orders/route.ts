@@ -105,12 +105,17 @@ export const POST = withAuth(
   withValidation({ body: CreateOrderSchema }, async ({ body, req }) => {
     orderCreateLimiter(req);
     const user = (req as NextRequest & { user?: AccessTokenPayload | null }).user!;
+    // X-Idempotency-Key：客户端提供 UUID，防止网络重试导致重复创建订单
+    const idempotencyKey = req.headers.get('X-Idempotency-Key') ?? undefined;
     const order = await createOrder({
       userId: user.sub,
       items: body.items,
       contact: body.contact,
       remark: body.remark,
+      idempotencyKey,
     });
-    return NextResponse.json({ order }, { status: 201 });
+    // 幂等命中返回 200（不是 201），让调用方区分"新创建"vs"已存在"
+    const isIdempotentHit = Boolean(idempotencyKey);
+    return NextResponse.json({ order }, { status: isIdempotentHit ? 200 : 201 });
   })
 );
