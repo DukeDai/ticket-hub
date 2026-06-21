@@ -6,14 +6,14 @@ import type { CreateCategoryInput } from '@/lib/validation/schemas';
 
 export async function listActiveCategories() {
   await connectDB();
-  // C30 perf: 与 listActiveCategoriesForUI 投影对齐，减少 wire 开销。
-  return Category.find({ isActive: true }).select('name slug ticketType sortOrder').sort({ sortOrder: 1, name: 1 }).lean();
+  // C30 perf: UI 只渲染 name/slug，移除不必要的 ticketType 投影。
+  return Category.find({ isActive: true }).select('name slug sortOrder').sort({ sortOrder: 1, name: 1 }).lean();
 }
 
 export async function listAllCategories() {
   await connectDB();
-  // C30 perf: CMS admin 列表只需 UI 渲染字段。
-  return Category.find({}).select('name slug ticketType sortOrder').sort({ sortOrder: 1 }).lean();
+  // C30 perf: CMS admin 列表只渲染 name/slug，移除 ticketType。
+  return Category.find({}).select('name slug sortOrder').sort({ sortOrder: 1 }).lean();
 }
 
 export async function createCategory(input: CreateCategoryInput) {
@@ -60,7 +60,7 @@ export async function listActiveCategoriesForUI() {
     'cms:categories:active',
     async () =>
       Category.find({ isActive: true })
-        .select('name slug ticketType sortOrder')
+        .select('name slug sortOrder')
         .sort({ sortOrder: 1, name: 1 })
         .lean(),
     { ttlMs: 60_000, staleMs: 300_000 }

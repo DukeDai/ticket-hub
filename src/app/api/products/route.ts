@@ -49,7 +49,7 @@ export const GET = withValidation(
           .sort(sortObj)
           .skip(skip)
           .limit(limit)
-          .populate('categoryId', 'name slug ticketType')
+          .populate('categoryId', 'name slug')
           .lean(),
         Product.countDocuments(filter),
       ]);
