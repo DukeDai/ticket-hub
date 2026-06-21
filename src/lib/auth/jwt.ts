@@ -17,6 +17,16 @@ export interface AccessTokenPayload extends JWTPayload {
   name: string;
 }
 
+export interface RefreshTokenPayload extends JWTPayload {
+  /** user id */
+  sub: string;
+  /** opaque token id stored server-side for revocation */
+  jti: string;
+}
+
+const REFRESH_ALG = 'HS256';
+const REFRESH_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
+
 const ALG = 'HS256';
 const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
@@ -101,4 +111,25 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenPaylo
   if (typeof payload.role !== 'string') throw new Error('Invalid token: missing role');
   if (typeof payload.name !== 'string') throw new Error('Invalid token: missing name');
   return payload as AccessTokenPayload;
+}
+
+export async function signRefreshToken(
+  payload: Omit<RefreshTokenPayload, 'iat' | 'exp'>,
+  ttlSeconds: number = REFRESH_TTL_SECONDS
+): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const sub = String(payload.sub);
+  return new SignJWT({ ...payload, sub })
+    .setProtectedHeader({ alg: REFRESH_ALG })
+    .setIssuedAt(now)
+    .setExpirationTime(now + ttlSeconds)
+    .setSubject(sub)
+    .sign(getSecret());
+}
+
+export async function verifyRefreshToken(token: string): Promise<RefreshTokenPayload> {
+  const { payload } = await jwtVerify(token, getSecret(), { algorithms: [REFRESH_ALG] });
+  if (typeof payload.sub !== 'string') throw new Error('Invalid token: missing sub');
+  if (typeof payload.jti !== 'string') throw new Error('Invalid token: missing jti');
+  return payload as RefreshTokenPayload;
 }

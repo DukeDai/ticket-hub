@@ -1,30 +1,24 @@
-import bcrypt from 'bcryptjs';
+import argon2 from 'argon2';
 
 /**
  * 密码哈希策略。
  *
  * - 永远不要存明文密码。
- * - bcrypt 是 CPU-bound 算法，cost 取 12 在安全与性能之间较平衡；
- *   调高会显著增加登录耗时（在线程池中运行时会阻塞事件循环，故密码学操作
- *   应优先使用 native bindings；bcryptjs 是纯 JS 实现，简单可移植）。
- * - 生产建议替换为 argon2id。
+ * - argon2id 是内存-hard 算法，side-effect resistant，OWASP 推荐。
+ * - 相比 bcrypt，argon2id 对 GPU/ASIC 攻击有更强抵抗力。
  */
-
-const SALT_ROUNDS = 12;
 
 export async function hashPassword(plain: string): Promise<string> {
   if (typeof plain !== 'string' || plain.length === 0) {
     throw new Error('Password must be a non-empty string');
   }
-  // bcrypt 限制 72 字节，预先 trim 防止意外
-  const safe = plain.slice(0, 72);
-  return bcrypt.hash(safe, SALT_ROUNDS);
+  return argon2.hash(plain);
 }
 
 export async function verifyPassword(plain: string, hash: string): Promise<boolean> {
   if (!plain || !hash) return false;
   try {
-    return await bcrypt.compare(plain.slice(0, 72), hash);
+    return await argon2.verify(hash, plain);
   } catch {
     return false;
   }
@@ -36,6 +30,6 @@ export async function verifyPassword(plain: string, hash: string): Promise<boole
  */
 export function isStrongPassword(p: string): boolean {
   if (typeof p !== 'string') return false;
-  if (p.length < 8 || p.length > 72) return false;
+  if (p.length < 8) return false;
   return /[A-Za-z]/.test(p) && /\d/.test(p);
 }

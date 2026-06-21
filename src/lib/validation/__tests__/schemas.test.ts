@@ -53,7 +53,7 @@ describe('RegisterSchema', () => {
     expect(r.success).toBe(false);
   });
 
-  it('rejects password longer than 72 chars (bcrypt limit)', () => {
+  it('rejects password longer than 72 chars', () => {
     const r = RegisterSchema.safeParse({
       email: 'alice@example.com',
       password: 'Aa1' + 'x'.repeat(70), // 73 chars

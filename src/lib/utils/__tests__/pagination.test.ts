@@ -114,43 +114,33 @@ describe('pagination', () => {
   });
 
   describe('buildPagination — search and extraFilter', () => {
-    it("q keyword adds $or with title regex", () => {
+    it("q keyword adds $text search", () => {
       const r = buildPagination({ page: 1, pageSize: 20, q: 'park' });
-      expect((r.filter as Record<string, unknown>).$or).toEqual([
-        { title: { $regex: 'park', $options: 'i' } },
-        { summary: { $regex: 'park', $options: 'i' } },
-      ]);
+      expect((r.filter as Record<string, unknown>).$text).toEqual({ $search: 'park' });
     });
 
-    it("q empty string does NOT add $or", () => {
+    it("q empty string does NOT add $text", () => {
       const r = buildPagination({ page: 1, pageSize: 20, q: '' });
-      expect((r.filter as Record<string, unknown>).$or).toBeUndefined();
+      expect((r.filter as Record<string, unknown>).$text).toBeUndefined();
     });
 
-    it('q undefined does NOT add $or', () => {
+    it('q undefined does NOT add $text', () => {
       const r = buildPagination({ page: 1, pageSize: 20, q: undefined });
-      expect((r.filter as Record<string, unknown>).$or).toBeUndefined();
+      expect((r.filter as Record<string, unknown>).$text).toBeUndefined();
     });
 
     it('q + extraFilter are merged', () => {
       const r = buildPagination({ page: 1, pageSize: 20, q: 'park', extraFilter: { status: 'active' } });
       expect(r.filter).toEqual({
         status: 'active',
-        $or: [
-          { title: { $regex: 'park', $options: 'i' } },
-          { summary: { $regex: 'park', $options: 'i' } },
-        ],
+        $text: { $search: 'park' },
       });
     });
 
-    it('q with regex special chars is escaped (prevents ReDoS / full-scan)', () => {
-      // C13 audit #2: Cycle 7 only fixed frontend/products/page.tsx; pagination.ts + cms
-      // were missed. Helper now lives in lib/utils/regex.ts and is applied here.
+    it('q with special chars: $text handles them natively (no ReDoS risk)', () => {
+      // $text search uses tokenization, not regex — no escaping needed
       const r = buildPagination({ page: 1, pageSize: 20, q: '.*' });
-      expect((r.filter as Record<string, unknown>).$or).toEqual([
-        { title: { $regex: '\\.\\*', $options: 'i' } },
-        { summary: { $regex: '\\.\\*', $options: 'i' } },
-      ]);
+      expect((r.filter as Record<string, unknown>).$text).toEqual({ $search: '.*' });
     });
 
     it('extraFilter without q', () => {
