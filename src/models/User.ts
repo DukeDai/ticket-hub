@@ -15,6 +15,8 @@ export interface IUser {
   name: string;
   phone?: string;
   role: UserRole;
+  /** 商户 ID。staff 角色属于某一商户；admin 无商户（null） */
+  merchantId?: mongoose.Types.ObjectId | null;
   isActive: boolean;
   lastLoginAt?: Date;
   createdAt: Date;
@@ -43,6 +45,14 @@ const userSchema = new Schema<IUser>(
       enum: ['user', 'staff', 'admin'],
       default: 'user',
       index: true,
+    },
+    merchantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      // staff 用户必须属于某商户；admin 无商户（index 有 null 值可通过 sparse 优化）
+      index: true,
+      sparse: true,
     },
     isActive: { type: Boolean, default: true },
     lastLoginAt: { type: Date },

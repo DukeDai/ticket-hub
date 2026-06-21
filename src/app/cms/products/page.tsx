@@ -1,10 +1,12 @@
 import Link from 'next/link';
 import Image from 'next/image';
+import mongoose from 'mongoose';
 import { connectDB } from '@/lib/db';
 import { Product } from '@/models';
 import { Button } from '@/components/ui/Button';
 import { escapeRegex } from '@/lib/utils/regex';
 import { listActiveCategoriesForUI } from '@/lib/services/CategoryService';
+import { requireAdmin } from '@/lib/auth/guard';
 
 export default async function CmsProductsPage({
   searchParams,
@@ -12,11 +14,16 @@ export default async function CmsProductsPage({
   searchParams: { page?: string; status?: string; q?: string };
 }) {
   await connectDB();
+  const user = await requireAdmin();
   const page = Math.max(1, Number(searchParams.page ?? 1));
   const pageSize = 20;
   const filter: Record<string, unknown> = {};
   if (searchParams.status) filter.status = searchParams.status;
   if (searchParams.q) filter.title = { $regex: escapeRegex(searchParams.q), $options: 'i' };
+  // staff 角色按 merchantId 隔离；admin 不设限
+  if (user.role === 'staff' && user.merchantId) {
+    filter.merchantId = new mongoose.Types.ObjectId(user.merchantId);
+  }
 
   const [items, total, categories] = await Promise.all([
     Product.find(filter)

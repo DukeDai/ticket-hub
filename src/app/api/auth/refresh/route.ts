@@ -52,6 +52,7 @@ export const POST = withError(async (req: NextRequest) => {
     role: entry.role,
     email: entry.email,
     name: entry.name,
+    merchantId: entry.merchantId,
   });
 
   // Issue new refresh token JWT

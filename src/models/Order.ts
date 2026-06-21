@@ -22,12 +22,14 @@ export type OrderStatus =
 
 export interface IOrderItem {
   productId: mongoose.Types.ObjectId;
-  /** 快照：商品标题/封面，避免商品改名后订单丢信息 */
+  /** 快照：商品标题/封面/商户，避免商品改名后订单丢信息 */
   productSnapshot: {
     title: string;
     cover: string;
     ticketType: string;
     location?: { city?: string; address?: string };
+    /** 商户 ID：便于凭证页展示商户信息 */
+    merchantId?: mongoose.Types.ObjectId | null;
   };
   variantId?: mongoose.Types.ObjectId | null;
   variantName?: string;
@@ -81,6 +83,7 @@ const orderItemSchema = new Schema<IOrderItem>(
         city: String,
         address: String,
       },
+      merchantId: { type: Schema.Types.ObjectId, ref: 'User' },
     },
     variantId: { type: Schema.Types.ObjectId, default: null },
     variantName: { type: String },

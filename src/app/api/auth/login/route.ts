@@ -62,11 +62,13 @@ export const POST = withValidation(
     await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
 
     const userId = String(user._id);
+    const merchantId = user.merchantId ? String(user.merchantId) : undefined;
     const token = await signAccessToken({
       sub: userId,
       role: user.role,
       email: user.email,
       name: user.name,
+      merchantId,
     });
 
     // Issue refresh token (server-side rotation store)
@@ -74,6 +76,7 @@ export const POST = withValidation(
       role: user.role,
       email: user.email,
       name: user.name,
+      merchantId,
     });
     const refreshJwt = await signRefreshToken({ sub: userId, jti: refreshTokenId });
 
@@ -83,6 +86,7 @@ export const POST = withValidation(
         email: user.email,
         name: user.name,
         role: user.role,
+        merchantId,
       },
       lockout: null,
       refreshToken: refreshJwt,

@@ -16,6 +16,8 @@ export interface ICategory {
   icon?: string;
   sortOrder: number;
   parentId?: mongoose.Types.ObjectId | null;
+  /** 商户 ID（admin 的 category 无商户归属） */
+  merchantId?: mongoose.Types.ObjectId | null;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -34,6 +36,7 @@ const categorySchema = new Schema<ICategory>(
     icon: { type: String, trim: true },
     sortOrder: { type: Number, default: 0, index: true },
     parentId: { type: Schema.Types.ObjectId, ref: 'Category', default: null, index: true },
+    merchantId: { type: Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     isActive: { type: Boolean, default: true },
   },
   { timestamps: true, collection: 'categories' }

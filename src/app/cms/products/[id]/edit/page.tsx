@@ -4,12 +4,21 @@ import { connectDB } from '@/lib/db';
 import { Product } from '@/models';
 import { ProductForm, type CategoryOption } from '../../ProductForm';
 import { listActiveCategoriesForUI } from '@/lib/services/CategoryService';
+import { requireAdmin } from '@/lib/auth/guard';
 
 export default async function EditProductPage({ params }: { params: { id: string } }) {
   if (!mongoose.isValidObjectId(params.id)) notFound();
+  const user = await requireAdmin();
   await connectDB();
+
+  // 构建查询条件：staff 必须匹配 merchantId；admin 不设限
+  const productFilter: Record<string, unknown> = { _id: new mongoose.Types.ObjectId(params.id) };
+  if (user.role === 'staff' && user.merchantId) {
+    productFilter.merchantId = new mongoose.Types.ObjectId(user.merchantId);
+  }
+
   const [product, cats] = await Promise.all([
-    Product.findById(params.id)
+    Product.findOne(productFilter)
       .select(
         'title summary description images categoryId ticketType priceInCents originalPriceInCents stock purchaseLimit location refundable instantConfirm status'
       )

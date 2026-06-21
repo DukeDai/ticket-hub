@@ -14,72 +14,84 @@ import type { AccessTokenPayload } from '@/lib/auth/jwt';
 /**
  * GET /api/products
  *   公开接口：默认只返回 status='active' 的商品。
- *   CMS 用户可以传 ?status=draft&status=active 查看其它状态。
+ *   staff 用户按 merchantId 过滤；admin 可见全部（包括其它商户商品）。
  *
  * POST /api/products
- *   仅 admin：创建商品（HOF 链：withError → withAuth → withValidation）。
+ *   仅 admin/staff：创建商品（HOF 链：withError → withAuth → withValidation）。
  */
 
-export const GET = withValidation(
-  { query: ListProductQuery },
-  async ({ query }) => {
-    const { page, pageSize, sort, q, categoryId, ticketType, city, status } = query;
-    const extraFilter: Record<string, unknown> = { status: status ?? 'active' };
-    // categoryId 必须在查询时转 ObjectId，否则 { categoryId, status, salesCount } 复合索引无法命中
-    if (categoryId) extraFilter.categoryId = new mongoose.Types.ObjectId(categoryId);
-    if (ticketType) extraFilter.ticketType = ticketType;
-    if (city) extraFilter['location.city'] = city;
+export const GET = withAuth(
+  { optional: true },
+  withValidation(
+    { query: ListProductQuery },
+    async ({ query, req }) => {
+      // withAuth({ optional: true }) attaches user to req
+      const user = (req as NextRequest & { user?: AccessTokenPayload | null }).user ?? null;
+      const { page, pageSize, sort, q, categoryId, ticketType, city, status } = query;
+      const extraFilter: Record<string, unknown> = { status: status ?? 'active' };
+      // categoryId 必须在查询时转 ObjectId，否则 { categoryId, status, salesCount } 复合索引无法命中
+      if (categoryId) extraFilter.categoryId = new mongoose.Types.ObjectId(categoryId);
+      if (ticketType) extraFilter.ticketType = ticketType;
+      if (city) extraFilter['location.city'] = city;
 
-    const { skip, limit, filter, sort: sortObj } = buildPagination({
-      page,
-      pageSize,
-      sort,
-      q,
-      extraFilter,
-    });
+      // RBAC：staff 按 merchantId 过滤；admin 和未登录用户看到全部
+      if (user && user.role === 'staff' && user.merchantId) {
+        extraFilter.merchantId = new mongoose.Types.ObjectId(user.merchantId);
+      }
 
-    // 列表查询执行器：直接走 DB（用于搜索路径 'q'，缓存被绕过）。
-    const runQuery = async () => {
-      await connectDB();
-      const [items, total] = await Promise.all([
-        Product.find(filter)
-          .select(
-            'title slug images priceInCents originalPriceInCents location.city salesCount ticketType'
-          )
-          .sort(sortObj)
-          .skip(skip)
-          .limit(limit)
-          .populate('categoryId', 'name slug')
-          .lean(),
-        Product.countDocuments(filter),
-      ]);
-      return pageResult(items, total, page, pageSize);
-    };
-
-    // cacheSWR：列表查询 TTL 短，搜索 'q' 直接绕过缓存（避免每个搜索词产生独立 cache key
-    // 导致 100% miss）。结构化列表仅按 sort/page/pageSize 等字段作为 key 命中。
-    // 写入路径（POST/PUT/DELETE products）在 service 层 cacheDelete 同步失效。
-    let result;
-    if (q) {
-      // 搜索路径：不缓存（不同 q 命中不同结果，且 key 不应包含 q 防止冲突）。
-      result = await runQuery();
-    } else {
-      const cacheKey = `products:list:${JSON.stringify({
+      const { skip, limit, filter, sort: sortObj } = buildPagination({
         page,
         pageSize,
         sort,
-        categoryId,
-        ticketType,
-        city,
-        status: status ?? 'active',
-      })}`;
-      result = await cacheSWR(cacheKey, runQuery, {
-        ttlMs: 15_000,
-        staleMs: 30_000,
+        q,
+        extraFilter,
       });
+
+      // 列表查询执行器：直接走 DB（用于搜索路径 'q'，缓存被绕过）。
+      const runQuery = async () => {
+        await connectDB();
+        const [items, total] = await Promise.all([
+          Product.find(filter)
+            .select(
+              'title slug images priceInCents originalPriceInCents location.city salesCount ticketType'
+            )
+            .sort(sortObj)
+            .skip(skip)
+            .limit(limit)
+            .populate('categoryId', 'name slug')
+            .lean(),
+          Product.countDocuments(filter),
+        ]);
+        return pageResult(items, total, page, pageSize);
+      };
+
+      // cacheSWR：列表查询 TTL 短，搜索 'q' 直接绕过缓存（避免每个搜索词产生独立 cache key
+      // 导致 100% miss）。结构化列表仅按 sort/page/pageSize 等字段作为 key 命中。
+      // 写入路径（POST/PUT/DELETE products）在 service 层 cacheDelete 同步失效。
+      let result;
+      if (q) {
+        // 搜索路径：不缓存（不同 q 命中不同结果，且 key 不应包含 q 防止冲突）。
+        result = await runQuery();
+      } else {
+        const cacheKey = `products:list:${JSON.stringify({
+          page,
+          pageSize,
+          sort,
+          categoryId,
+          ticketType,
+          city,
+          status: status ?? 'active',
+          // staff 用户的 merchantId 不同，缓存 key 必须区分
+          ...(user && user.role === 'staff' && user.merchantId ? { merchantId: user.merchantId } : {}),
+        })}`;
+        result = await cacheSWR(cacheKey, runQuery, {
+          ttlMs: 15_000,
+          staleMs: 30_000,
+        });
+      }
+      return NextResponse.json(result);
     }
-    return NextResponse.json(result);
-  }
+  )
 );
 
 /**
@@ -102,8 +114,7 @@ export const POST = withAuth(
       );
     }
     const user = (req as NextRequest & { user?: AccessTokenPayload | null }).user!;
-    const product = await createProduct(body, user.sub);
+    const product = await createProduct(body, user.sub, (user.merchantId ?? undefined));
     return NextResponse.json({ product }, { status: 201 });
   })
 );
-

@@ -1,7 +1,9 @@
 import { ProductForm, type CategoryOption } from '../ProductForm';
 import { listActiveCategoriesForUI } from '@/lib/services/CategoryService';
+import { requireAdmin } from '@/lib/auth/guard';
 
 export default async function NewProductPage() {
+  const user = await requireAdmin();
   const cats = await listActiveCategoriesForUI();
   const categories: CategoryOption[] = cats.map((c) => ({
     id: String(c._id),
@@ -16,7 +18,7 @@ export default async function NewProductPage() {
           还没有任何分类，请先到「分类管理」创建一个分类。
         </div>
       ) : (
-        <ProductForm categories={categories} />
+        <ProductForm categories={categories} merchantId={user.role === 'staff' ? (user.merchantId ?? undefined) : undefined} />
       )}
     </div>
   );

@@ -96,7 +96,7 @@ async function ensureUniqueSlug(base: string): Promise<string> {
   return `${base}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export async function createProduct(input: CreateProductInput, createdBy: string) {
+export async function createProduct(input: CreateProductInput, createdBy: string, merchantId?: string) {
   await connectDB();
   const cat = await Category.findById(input.categoryId).lean();
   if (!cat) throw new AppError('CATEGORY_NOT_FOUND', 'Category not found', 404);
@@ -109,11 +109,13 @@ export async function createProduct(input: CreateProductInput, createdBy: string
   }
   const baseSlug = input.slug ?? slugify(input.title);
   const slug = await ensureUniqueSlug(baseSlug);
-  const product = await Product.create({
+  const doc: Record<string, unknown> = {
     ...input,
     slug,
     createdBy: new mongoose.Types.ObjectId(createdBy),
-  });
+  };
+  if (merchantId) doc.merchantId = new mongoose.Types.ObjectId(merchantId);
+  const product = await Product.create(doc);
   // 写后失效：商品列表缓存（任何 ?status=active 的列表都可能受新建影响）
   cacheDeletePrefix('products:list:');
   return product;
@@ -164,13 +166,15 @@ export async function offlineProduct(id: string, updatedBy: string) {
   return updated;
 }
 
-export async function listProducts(query: ListProductQuery) {
+export async function listProducts(query: ListProductQuery, merchantId?: string) {
   await connectDB();
   const { page, pageSize, sort, q, categoryId, ticketType, city, status } = query;
   const extraFilter: Record<string, unknown> = { status: status ?? 'active' };
   if (categoryId) extraFilter.categoryId = new mongoose.Types.ObjectId(categoryId);
   if (ticketType) extraFilter.ticketType = ticketType;
   if (city) extraFilter['location.city'] = city;
+  // CMS 场景：staff 用户只能看到自己商户的商品；admin 不设限（merchantId 为空/undefined 时不过滤）
+  if (merchantId) extraFilter.merchantId = new mongoose.Types.ObjectId(merchantId);
 
   const { skip, limit, filter, sort: sortObj } = buildPagination({
     page,

@@ -100,6 +100,7 @@ export async function quoteOrder(items: CreateOrderItemInput[]) {
         cover: product.images?.[0] ?? '',
         ticketType: product.ticketType,
         location: product.location,
+        merchantId: product.merchantId,
       },
       variantId: variant?._id ?? null,
       variantName: q.variantName,

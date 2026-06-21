@@ -34,9 +34,12 @@ interface InitialValues {
 export function ProductForm({
   categories,
   initial,
+  merchantId,
 }: {
   categories: CategoryOption[];
   initial?: InitialValues;
+  /** staff 用户创建商品时附带的商户 ID；admin 不传 */
+  merchantId?: string;
 }) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
@@ -100,6 +103,7 @@ export function ProductForm({
         skuVariants: [],
         dailyInventory: [],
         attributes: {},
+        ...(merchantId ? { merchantId } : {}),
       };
       const url = form.id ? `/api/products/${form.id}` : '/api/products';
       const method = form.id ? 'PUT' : 'POST';

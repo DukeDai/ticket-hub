@@ -15,6 +15,8 @@ export interface AccessTokenPayload extends JWTPayload {
   role: 'user' | 'staff' | 'admin';
   email: string;
   name: string;
+  /** 商户 ID（staff 有值，admin/user 为 null） */
+  merchantId?: string | null;
 }
 
 export interface RefreshTokenPayload extends JWTPayload {

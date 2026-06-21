@@ -109,6 +109,8 @@ export const CreateProductSchema = z.object({
   refundDeadlineHours: z.number().int().min(0).max(720).optional(),
   instantConfirm: z.boolean().default(true),
   attributes: z.record(z.string(), z.unknown()).default({}),
+  /** 商户 ID：staff 用户创建商品时必填；admin 可不填（不限制） */
+  merchantId: objectId.optional(),
   status: z.enum(['draft', 'active', 'offline']).default('draft'),
 });
 export type CreateProductInput = z.infer<typeof CreateProductSchema>;

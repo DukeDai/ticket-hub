@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
+import { Product } from '@/models';
 import { withValidation } from '@/lib/middleware/withValidation';
 import { withAuth } from '@/lib/middleware/withAuth';
 import { AppError } from '@/lib/middleware/withError';
@@ -70,6 +71,7 @@ export const GET = withAuth<[Ctx]>(async (req, user, ctx) => {
 
 /**
  * PUT：admin/staff 用，body 仍走 withValidation（保留 1MB cap + content-type 检查）。
+ * RBAC：staff 只能编辑自己商户的商品；admin 不受 merchantId 限制。
  */
 export const PUT = withAuth<[Ctx]>(async (req, user, ctx) => {
   if (user.role !== 'admin' && user.role !== 'staff') {
@@ -78,6 +80,16 @@ export const PUT = withAuth<[Ctx]>(async (req, user, ctx) => {
   const { id } = ctx.params;
   if (!mongoose.isValidObjectId(id)) {
     throw new AppError('INVALID_ID', 'Invalid product id', 400);
+  }
+  // 所有权检查：staff 必须属于同一商户
+  if (user.role === 'staff' && user.merchantId) {
+    await connectDB();
+    const product = await Product.findById(id).select('merchantId').lean();
+    if (!product) throw new AppError('NOT_FOUND', 'Product not found', 404);
+    const productMerchantId = (product as unknown as { merchantId?: string }).merchantId;
+    if (productMerchantId !== user.merchantId) {
+      throw new AppError('FORBIDDEN', 'Cannot edit another merchant\'s product', 403);
+    }
   }
   return withValidation({ body: UpdateProductSchema }, async ({ body }) => {
     const updated = await updateProduct(id, body, user.sub);

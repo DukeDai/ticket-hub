@@ -21,6 +21,8 @@ export interface RefreshTokenEntry {
   role: 'user' | 'staff' | 'admin';
   email: string;
   name: string;
+  /** 商户 ID（staff 有值，admin/user 为 null） */
+  merchantId?: string | null;
   familyId: string;
   createdAt: number;
   expiresAt: number;
@@ -29,7 +31,7 @@ export interface RefreshTokenEntry {
 /** Issue a new refresh token for a user (new family). */
 export async function issueRefreshToken(
   userId: string,
-  meta: { role: 'user' | 'staff' | 'admin'; email: string; name: string }
+  meta: { role: 'user' | 'staff' | 'admin'; email: string; name: string; merchantId?: string | null }
 ): Promise<string> {
   const tokenId = randomUUID();
   const familyId = randomUUID();
@@ -39,6 +41,7 @@ export async function issueRefreshToken(
     role: meta.role,
     email: meta.email,
     name: meta.name,
+    merchantId: meta.merchantId,
     familyId,
     createdAt: now,
     expiresAt: now + REFRESH_TTL_MS,
@@ -71,6 +74,7 @@ export async function rotateRefreshToken(oldTokenId: string): Promise<string | n
     role: oldEntry.role,
     email: oldEntry.email,
     name: oldEntry.name,
+    merchantId: oldEntry.merchantId,
     familyId: oldEntry.familyId,
     createdAt: now,
     expiresAt: now + REFRESH_TTL_MS,

@@ -90,6 +90,8 @@ export interface IProduct {
 
   status: ProductStatus;
   createdBy: mongoose.Types.ObjectId;
+  /** 所属商户：用于 CMS 权限隔离。admin 可见所有，staff 仅见自己商户的商品 */
+  merchantId?: mongoose.Types.ObjectId | null;
   updatedBy?: mongoose.Types.ObjectId;
 
   createdAt: Date;
@@ -168,6 +170,7 @@ const productSchema = new Schema<IProduct>(
       index: true,
     },
     createdBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    merchantId: { type: Schema.Types.ObjectId, ref: 'User', index: true },
     updatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   { timestamps: true, collection: 'products' }

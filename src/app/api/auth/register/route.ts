@@ -45,6 +45,7 @@ export const POST = withValidation(
       role: user.role,
       email: user.email,
       name: user.name,
+      merchantId: undefined,
     });
     const res = NextResponse.json({
       user: { id: String(user._id), email: user.email, name: user.name, role: user.role },
