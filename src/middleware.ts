@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { logger } from '@/lib/logger';
 
 /**
  * 全局 middleware：
@@ -37,8 +38,7 @@ const PRODUCT_DETAIL_RE = /\/api\/products\/[^/]+$/;
  * 启动时若 ALLOWED_ORIGINS 误含 'null'，打 warning 提示运维清理。
  */
 if (ALLOWED_ORIGINS.includes('null') && process.env.NODE_ENV === 'production') {
-  // eslint-disable-next-line no-console
-  console.warn(
+  logger.warn(
     '[csrf] ALLOWED_ORIGINS contains "null" in production — this is unsafe. Remove it.'
   );
 }

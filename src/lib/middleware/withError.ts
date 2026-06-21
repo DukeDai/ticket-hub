@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { ZodError } from 'zod';
+import { logger } from '@/lib/logger';
 
 /**
  * 统一错误响应。route handler 抛错时由 withError 捕获并转换为标准 JSON：
@@ -74,9 +75,8 @@ const SAFE_MESSAGES: Record<string, string> = {
 
 function safeMessageFor(code: string, fallback: string): string {
   if (code in SAFE_MESSAGES) return SAFE_MESSAGES[code] as string;
-  // 未登记的 code 走 generic；服务端 console.warn 一次便于发现漏登记。
-  // eslint-disable-next-line no-console
-  console.warn(`[withError] unmapped AppError code: ${code}`);
+  // 未登记的 code 走 generic；服务端 logger.warn 一次便于发现漏登记。
+  logger.warn(`[withError] unmapped AppError code: ${code}`);
   return fallback;
 }
 
@@ -135,8 +135,7 @@ export function errorResponse(err: unknown): NextResponse {
   const code =
     status === 401 ? 'UNAUTHENTICATED' : status === 403 ? 'FORBIDDEN' : 'INTERNAL';
   if (status >= 500) {
-    // eslint-disable-next-line no-console
-    console.error('[api] unhandled error', err);
+    logger.error('[api] unhandled error', err);
   }
   const message = status >= 500 ? 'Internal server error' : e?.message ?? 'Request failed';
   return NextResponse.json({ error: { code, message } }, { status, headers: extraHeaders });
