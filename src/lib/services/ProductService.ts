@@ -216,5 +216,7 @@ export async function getProductById(
   if (shouldBumpView(opts?.ip ?? null, id)) {
     Product.updateOne({ _id: id }, { $inc: { viewCount: 1 } }).catch(() => undefined);
   }
-  return p as unknown as { _id: Types.ObjectId; [k: string]: unknown };
+  // C32-01：移除 double-cast。lean() 返回的 type 已经是 Mongoose 推断的宽类型，
+  // 函数 signature 用 index signature [k: string]: unknown 足够覆盖。
+  return p as { _id: Types.ObjectId; [k: string]: unknown };
 }

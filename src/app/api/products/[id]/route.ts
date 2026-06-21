@@ -1,4 +1,4 @@
-import { NextResponse, type NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
 import { connectDB } from '@/lib/db';
 import { withValidation } from '@/lib/middleware/withValidation';
 import { withAuth } from '@/lib/middleware/withAuth';
@@ -6,7 +6,6 @@ import { AppError } from '@/lib/middleware/withError';
 import { UpdateProductSchema } from '@/lib/validation/schemas';
 import { updateProduct, offlineProduct, getProductById } from '@/lib/services/ProductService';
 import { getClientIp } from '@/lib/utils/clientIp';
-import type { AccessTokenPayload } from '@/lib/auth/jwt';
 import mongoose from 'mongoose';
 
 /**
@@ -58,7 +57,8 @@ export const GET = withAuth<[Ctx]>(async (req, user, ctx) => {
   if (!product) throw new AppError('NOT_FOUND', 'Product not found', 404);
   // staff / admin：放行所有状态；其余（含匿名）：仅 active。
   const isStaff = user?.role === 'staff' || user?.role === 'admin';
-  const productStatus = (product as unknown as { status?: string }).status;
+  // C32-03：移除 double-cast。product 有 [k: string]: unknown index signature，直接访问 .status。
+  const productStatus = (product as { status?: string }).status;
   if (!isStaff && productStatus && productStatus !== 'active') {
     throw new AppError('NOT_FOUND', 'Product not found', 404);
   }
@@ -85,7 +85,7 @@ export const PUT = withAuth<[Ctx]>(async (req, user, ctx) => {
 /**
  * DELETE：仅 admin（软删 → status=offline）。
  */
-export const DELETE = withAuth<[Ctx]>(async (req, user, ctx) => {
+export const DELETE = withAuth<[Ctx]>(async (_req, user, ctx) => {
   if (user.role !== 'admin') {
     throw new AppError('FORBIDDEN', 'Insufficient role', 403);
   }
