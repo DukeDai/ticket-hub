@@ -6,7 +6,7 @@ import { AppError } from '@/lib/middleware/withError';
 import { getStrategy } from '@/lib/strategies';
 import { ORDER_PRODUCT_PROJECTION } from '@/lib/models/projection-keys';
 import { logger } from '@/lib/logger';
-import { voucherGenerationQueue, orderConfirmationQueue, refundProcessorQueue } from '@/lib/queue';
+import { addOrderConfirmation, addVoucherGeneration } from '@/lib/queue-safe';
 
 /**
  * 订单服务。
@@ -384,12 +384,12 @@ export async function payOrder(orderId: string, actor: OrderActor) {
 
     // 5) 触发异步任务（支付完成后非关键路径剥离到队列）
     await Promise.all([
-      orderConfirmationQueue.add('send', {
+      addOrderConfirmation({
         orderId: String(orderId),
         userId: String(resultOrder!.userId),
         orderNo: resultOrder!.orderNo,
       }),
-      voucherGenerationQueue.add('generate', {
+      addVoucherGeneration({
         orderId: String(orderId),
         orderNo: resultOrder!.orderNo,
         userId: String(resultOrder!.userId),

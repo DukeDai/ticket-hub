@@ -12,18 +12,11 @@ const nextConfig = withNextIntl({
   },
   async headers() {
     const isProd = process.env.NODE_ENV === 'production';
-    // img-src 白名单：生产从 CSP_IMG_HOSTS 环境变量读（逗号分隔），多个 host 包含完整 origin。
-    // 默认含 'self' + data: + https:，覆盖大多数部署（Vercel、CDN、S3、对象存储等）。
-    // 生产默认值改动（C8 修复）：从 `'self' data:` 放宽到 `'self' data: https:`，
-    // 避免无 CSP_IMG_HOSTS 配置时所有 https:// 图片被 CSP 拦截。
-    // 如需更严的 prod 白名单，在 .env 中显式设置 CSP_IMG_HOSTS（逗号分隔 origin 列表）。
     const imgHosts = (process.env.CSP_IMG_HOSTS ?? "'self' data: https:")
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
     const imgSrc = isProd ? imgHosts.join(' ') : "'self' data: https:";
-    // 生产环境启用 CSP + HSTS。Next.js + Tailwind 需 'unsafe-inline' 兼容；
-    // CSP 偏严，下游可按业务调整。
     const prodSecurityHeaders = isProd
       ? [
           {
@@ -57,6 +50,6 @@ const nextConfig = withNextIntl({
       },
     ];
   },
-};
+});
 
 export default nextConfig;

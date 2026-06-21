@@ -16,6 +16,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "argon2": "^0.44.0",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.79.0",
     "ioredis": "^5.4.1",
