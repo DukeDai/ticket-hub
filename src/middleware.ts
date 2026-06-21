@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { logger } from '@/lib/logger';
+import { globalLimiter } from '@/lib/rate-limit';
 
 /**
  * 全局 middleware：
@@ -74,6 +75,23 @@ function isOriginAllowed(req: NextRequest): boolean {
 
 export function middleware(req: NextRequest) {
   const res = NextResponse.next();
+
+  // ── Rate Limiting (C33) ─────────────────────────────────────────────────────
+  // Global IP-based token bucket for all /api/* routes.
+  // Configurable via RATE_LIMIT_WINDOW (seconds, default 60)
+  // and RATE_LIMIT_MAX (tokens per window, default 100).
+  if (req.nextUrl.pathname.startsWith('/api/')) {
+    const ip =
+      (req.headers.get('x-forwarded-for') ?? '').split(',')[0]?.trim() ||
+      req.headers.get('x-real-ip') ||
+      'unknown';
+    if (!globalLimiter.consume(ip)) {
+      return NextResponse.json(
+        { error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
+        { status: 429 }
+      );
+    }
+  }
 
   // CSRF: mutating API 请求必须带白名单 origin
   if (
