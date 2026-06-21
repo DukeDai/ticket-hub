@@ -113,6 +113,7 @@ export const POST = withAuth(
       contact: body.contact,
       remark: body.remark,
       idempotencyKey,
+      couponCode: body.couponCode,
     });
     // 幂等命中返回 200（不是 201），让调用方区分"新创建"vs"已存在"
     const isIdempotentHit = Boolean(idempotencyKey);

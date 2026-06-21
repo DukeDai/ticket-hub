@@ -68,6 +68,11 @@ export interface IOrder {
   /** 幂等键：防止重复创建订单（客户端提供，如 UUID） */
   idempotencyKey?: string;
 
+  /** 优惠券码 */
+  couponCode?: string;
+  /** 优惠券抵扣金额（分），折扣后订单需付金额 = totalAmountInCents - discountAmountInCents */
+  discountAmountInCents?: number;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -123,6 +128,8 @@ const orderSchema = new Schema<IOrder>(
     refundedAt: { type: Date },
     remark: { type: String, maxlength: 500 },
     idempotencyKey: { type: String, maxlength: 64, sparse: true },
+    couponCode: { type: String, maxlength: 32 },
+    discountAmountInCents: { type: Number, min: 0 },
   },
   { timestamps: true, collection: 'orders' }
 );

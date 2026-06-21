@@ -7,6 +7,7 @@ import { getStrategy } from '@/lib/strategies';
 import { ORDER_PRODUCT_PROJECTION } from '@/lib/models/projection-keys';
 import { logger } from '@/lib/logger';
 import { addOrderConfirmation, addVoucherGeneration } from '@/lib/queue-safe';
+import { validateCoupon } from './CouponService';
 
 /**
  * 订单服务。
@@ -33,6 +34,8 @@ export interface CreateOrderInput {
   idempotencyKey?: string;
   /** 默认 15 分钟过期 */
   expiresInMs?: number;
+  /** 优惠券码（可选） */
+  couponCode?: string;
 }
 
 interface LeanProduct extends Omit<IProduct, 'skuVariants' | 'dailyInventory' | 'attributes'> {
@@ -128,12 +131,33 @@ export async function createOrder(input: CreateOrderInput) {
   }
 
   const { orderItems, total } = await quoteOrder(input.items);
+
+  // 优惠券校验（若提供）
+  let couponCode: string | undefined;
+  let discountAmountInCents = 0;
+  if (input.couponCode) {
+    const productIds = input.items.map((it) => it.productId);
+    const couponResult = await validateCoupon(
+      input.couponCode,
+      total,
+      input.userId,
+      productIds
+    );
+    if (!couponResult.valid) {
+      throw new AppError('COUPON_INVALID', couponResult.reason ?? 'Coupon is not valid', 422);
+    }
+    couponCode = input.couponCode.toUpperCase();
+    discountAmountInCents = couponResult.discountInCents ?? 0;
+  }
+
   const expiresAt = new Date(Date.now() + (input.expiresInMs ?? 15 * 60 * 1000));
   const order = await Order.create({
     orderNo: orderNo(),
     userId: new mongoose.Types.ObjectId(input.userId),
     items: orderItems,
     totalAmountInCents: total,
+    couponCode,
+    discountAmountInCents,
     status: 'pending',
     contact: input.contact,
     remark: input.remark,

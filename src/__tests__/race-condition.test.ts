@@ -52,7 +52,7 @@ describe('OrderService race conditions', () => {
   let categoryId: mongoose.Types.ObjectId;
 
   beforeEach(async () => {
-    await mongooseInstance.connection.db.dropDatabase();
+    await mongooseInstance.connection.db!.dropDatabase();
     const user = await createTestUser();
     userId = String(user._id);
     const cat = await createTestCategory();
@@ -302,7 +302,7 @@ describe('CartService race conditions', () => {
   let categoryId: mongoose.Types.ObjectId;
 
   beforeEach(async () => {
-    await mongooseInstance.connection.db.dropDatabase();
+    await mongooseInstance.connection.db!.dropDatabase();
     const user = await createTestUser();
     userId = String(user._id);
     const cat = await createTestCategory();

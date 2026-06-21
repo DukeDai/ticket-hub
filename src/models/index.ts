@@ -8,6 +8,7 @@ export { Product } from './Product';
 export { Cart } from './Cart';
 export { Order } from './Order';
 export { Voucher } from './Voucher';
+export { Coupon } from './Coupon';
 export type { IUser, UserRole, UserDoc } from './User';
 export type { ICategory, CategoryDoc, TicketType } from './Category';
 export type {
@@ -20,3 +21,4 @@ export type {
 export type { ICart, ICartItem, CartDoc } from './Cart';
 export type { IOrder, IOrderItem, OrderDoc, OrderStatus } from './Order';
 export type { IVoucher, VoucherDoc, VoucherStatus } from './Voucher';
+export type { ICoupon, CouponDoc, CouponType, CouponStatus } from './Coupon';
