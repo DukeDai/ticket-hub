@@ -154,12 +154,14 @@ export async function applyCoupon(
 
   if (!result.valid) return { success: false, error: result.reason };
 
-  // 原子递增 usedCount，防止并发超用。
-  // 两步策略：validateCoupon 已确认 coupon 有效且有库存，此处直接递增。
-  // 非完美原子（validate 和 update 之间有窗口），但 validateCoupon 的 usedCount 校验
-  // 已是乐观锁，最坏情况是 1 次超额，线上可接受。
+  // 原子递增 usedCount — 当 maxTotalUses > 0 时，filter 包含 usedCount < maxTotalUses，
+  // 让 MongoDB 原子地拒绝超额请求；maxTotalUses = 0 表示无限，skip 此检查。
+  const filter: Record<string, unknown> = { code: code.toUpperCase() };
+  if (result.coupon!.maxTotalUses > 0) {
+    filter.usedCount = { $lt: result.coupon!.maxTotalUses };
+  }
   const updated = await Coupon.findOneAndUpdate(
-    { code: code.toUpperCase() },
+    filter,
     { $inc: { usedCount: 1 } },
     { new: true }
   );

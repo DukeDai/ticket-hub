@@ -2,12 +2,12 @@ import { NextResponse } from 'next/server';
 import { withAuth } from '@/lib/middleware/withAuth';
 import { withValidation } from '@/lib/middleware/withValidation';
 import { createCoupon, listCoupons } from '@/lib/services/CouponService';
-import { CreateCouponSchema, ListCouponQuery } from '@/lib/validation/schemas';
+import { CreateCouponSchema } from '@/lib/validation/schemas';
 
 export const GET = withAuth<[]>(
   async (_req, user) => {
     if (user.role !== 'admin' && user.role !== 'staff') {
-      return NextResponse.json({ coupons: [], total: 0 });
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     const result = await listCoupons({});
     return NextResponse.json({ coupons: result.coupons, total: result.total });

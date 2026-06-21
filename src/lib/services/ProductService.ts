@@ -2,6 +2,7 @@ import mongoose, { type Types } from 'mongoose';
 import { connectDB } from '@/lib/db';
 import { Product, Category } from '@/models';
 import { AppError } from '@/lib/middleware/withError';
+import { logger } from '@/lib/logger';
 import { buildPagination } from '@/lib/utils/pagination';
 import { cacheDeletePrefix } from '@/lib/cache';
 import type {
@@ -304,7 +305,7 @@ export async function getProductById(
   if (!p) return null;
   // 通过 shouldBumpView 节流增加 viewCount（C15/C17）
   if (shouldBumpView(opts?.ip ?? null, id)) {
-    Product.updateOne({ _id: id }, { $inc: { viewCount: 1 } }).catch(() => undefined);
+    Product.updateOne({ _id: id }, { $inc: { viewCount: 1 } }).catch((e) => logger.warn(`[ProductService] viewCount bump failed: ${e}`));
   }
   // C32-01：移除 double-cast。lean() 返回的 type 已经是 Mongoose 推断的宽类型，
   // 函数 signature 用 index signature [k: string]: unknown 足够覆盖。
