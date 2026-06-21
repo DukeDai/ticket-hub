@@ -2,7 +2,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { connectDB } from '@/lib/db';
 import { User } from '@/models';
 import { verifyPassword } from '@/lib/auth/password';
-import { signAccessToken, expiresInSeconds } from '@/lib/auth/jwt';
+import { signAccessToken, expiresInSeconds, signRefreshToken } from '@/lib/auth/jwt';
+import { issueRefreshToken } from '@/lib/auth/refresh';
 import { authCookieOptions } from '@/lib/auth/session';
 import { withValidation } from '@/lib/middleware/withValidation';
 import { LoginSchema } from '@/lib/validation/schemas';
@@ -60,20 +61,27 @@ export const POST = withValidation(
     resetLockout(email);
     await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });
 
+    const userId = String(user._id);
     const token = await signAccessToken({
-      sub: String(user._id),
+      sub: userId,
       role: user.role,
       email: user.email,
       name: user.name,
     });
+
+    // Issue refresh token (server-side rotation store)
+    const refreshTokenId = issueRefreshToken(userId);
+    const refreshJwt = await signRefreshToken({ sub: userId, jti: refreshTokenId });
+
     const res = NextResponse.json({
       user: {
-        id: String(user._id),
+        id: userId,
         email: user.email,
         name: user.name,
         role: user.role,
       },
       lockout: null,
+      refreshToken: refreshJwt,
     });
     res.cookies.set({
       ...authCookieOptions(expiresInSeconds()),
