@@ -41,6 +41,15 @@ export const LoginSchema = z.object({
 });
 export type LoginInput = z.infer<typeof LoginSchema>;
 
+export const LoginLockoutSchema = z.object({
+  error: z.literal('ACCOUNT_LOCKED'),
+  message: z.string(),
+  lockedUntil: z.string().datetime(),
+  remainingSeconds: z.number().int().positive(),
+});
+
+export type LoginLockoutInfo = z.infer<typeof LoginLockoutSchema>;
+
 // ----- Product -----
 const TicketType = z.enum(['sight', 'show', 'dining', 'experience', 'other']);
 
