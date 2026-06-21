@@ -9,6 +9,7 @@ const items = [
   { href: '/cms/orders', label: '订单管理', icon: '📦' },
   { href: '/cms/vouchers', label: '票券核销', icon: '✅' },
   { href: '/cms/categories', label: '分类管理', icon: '🗂' },
+  { href: '/cms/coupons', label: '优惠券管理', icon: '🎟' },
 ];
 
 export function CmsSidebar() {

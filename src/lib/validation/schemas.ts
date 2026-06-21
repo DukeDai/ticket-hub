@@ -264,3 +264,28 @@ export const ListCouponQuery = PaginationQuery.extend({
   type: CouponType.optional(),
 });
 export type ListCouponQuery = z.infer<typeof ListCouponQuery>;
+
+export const UpdateCouponSchema = z
+  .object({
+    type: CouponType.optional(),
+    valueInCents: z.number().int().min(1).optional(),
+    percent: z.number().int().min(1).max(100).optional(),
+    minOrderInCents: z.number().int().min(0).default(0),
+    maxTotalUses: z.number().int().min(0).default(0),
+    maxPerUser: z.number().int().min(1).default(1),
+    validFrom: z.coerce.date(),
+    validUntil: z.coerce.date(),
+    status: z.enum(['active', 'inactive']).default('active'),
+    applicableProducts: z.array(objectId).default([]),
+    applicableCategories: z.array(objectId).default([]),
+  })
+  .partial()
+  .refine(
+    (data) => {
+      if (data.type === 'fixed' && !data.valueInCents) return false;
+      if (data.type === 'percent' && !data.percent) return false;
+      return true;
+    },
+    { message: 'valueInCents required for fixed; percent required for percent', path: ['type'] }
+  );
+export type UpdateCouponInput = z.infer<typeof UpdateCouponSchema>;

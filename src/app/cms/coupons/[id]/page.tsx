@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import mongoose from 'mongoose';
 import { connectDB } from '@/lib/db';
 import { Coupon } from '@/models/Coupon';
-import { CouponForm } from '../../CouponForm';
+import { CouponForm } from '@/app/cms/coupons/CouponForm';
 import { requireAdmin } from '@/lib/auth/guard';
 
 export default async function EditCouponPage({ params }: { params: { id: string } }) {
