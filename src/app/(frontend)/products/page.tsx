@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Image from 'next/image';
 import mongoose from 'mongoose';
 import { connectDB } from '@/lib/db';
 import { Product } from '@/models';
@@ -113,9 +114,11 @@ export default async function ProductsPage({
                 className="overflow-hidden rounded-lg border border-gray-200 bg-white transition hover:shadow"
               >
                 {p.images?.[0] ? (
-                  <img
+                  <Image
                     src={p.images[0]}
                     alt={p.title}
+                    width={400}
+                    height={300}
                     className="aspect-[4/3] w-full object-cover"
                   />
                 ) : (

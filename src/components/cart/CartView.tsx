@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { Button } from '@/components/ui/Button';
 
 interface CartItem {
@@ -93,9 +94,11 @@ export function CartView({ initial }: { initial: { items: CartItem[] } }) {
             className="flex items-center gap-4 border-b border-gray-100 p-4 last:border-0"
           >
             {it.product?.cover ? (
-              <img
+              <Image
                 src={it.product.cover}
                 alt=""
+                width={80}
+                height={80}
                 className="h-20 w-20 rounded object-cover"
               />
             ) : (

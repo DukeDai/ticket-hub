@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Image from 'next/image';
 import { connectDB } from '@/lib/db';
 import { Product } from '@/models';
 import { Button } from '@/components/ui/Button';
@@ -90,7 +91,7 @@ export default async function CmsProductsPage({
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-3">
                       {p.images?.[0] ? (
-                        <img src={p.images[0]} alt="" className="h-10 w-10 rounded object-cover" />
+                        <Image src={p.images[0]} alt="" width={40} height={40} className="h-10 w-10 rounded object-cover" />
                       ) : (
                         <div className="h-10 w-10 rounded bg-gray-100" />
                       )}

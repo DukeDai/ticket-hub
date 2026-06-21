@@ -1,5 +1,6 @@
 import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
+import Image from 'next/image';
 import { connectDB } from '@/lib/db';
 import { Product } from '@/models';
 import { shouldBumpView } from '@/lib/services/ProductService';
@@ -33,9 +34,11 @@ export default async function ProductDetailPage({ params }: { params: { slug: st
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
         <div>
           {product.images?.[0] ? (
-            <img
+            <Image
               src={product.images[0]}
               alt={product.title}
+              width={800}
+              height={600}
               className="w-full rounded-lg object-cover"
             />
           ) : (
@@ -44,10 +47,12 @@ export default async function ProductDetailPage({ params }: { params: { slug: st
           {product.images && product.images.length > 1 && (
             <div className="mt-3 grid grid-cols-4 gap-2">
               {product.images.slice(1, 5).map((src, i) => (
-                <img
+                <Image
                   key={i}
                   src={src}
                   alt=""
+                  width={200}
+                  height={200}
                   className="aspect-square rounded object-cover"
                 />
               ))}

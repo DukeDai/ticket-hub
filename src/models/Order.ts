@@ -63,6 +63,9 @@ export interface IOrder {
   refundedAt?: Date;
   remark?: string;
 
+  /** 幂等键：防止重复创建订单（客户端提供，如 UUID） */
+  idempotencyKey?: string;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -116,6 +119,7 @@ const orderSchema = new Schema<IOrder>(
     cancelledAt: { type: Date },
     refundedAt: { type: Date },
     remark: { type: String, maxlength: 500 },
+    idempotencyKey: { type: String, maxlength: 64, sparse: true },
   },
   { timestamps: true, collection: 'orders' }
 );
@@ -144,6 +148,8 @@ orderSchema.index(
     partialFilterExpression: { status: 'paying' },
   }
 );
+// 幂等键唯一索引（sparse：允许 null，即无 idempotencyKey 的订单不受影响）
+orderSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 
 orderSchema.set('toJSON', {
   versionKey: false,
