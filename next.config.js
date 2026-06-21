@@ -35,6 +35,8 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "connect-src 'self' https:",
               "frame-ancestors 'none'",
+              "base-uri 'self'",
+              "object-src 'none'",
             ].join('; '),
           },
         ]
