@@ -57,7 +57,7 @@ async function handleVoucherGeneration(job: Job<VoucherGenerationJob>): Promise<
       const voucherDocs = [];
 
       for (const pd of productData) {
-        const strategy = getStrategy(pd.ticketType);
+        const strategy = getStrategy(pd.ticketType as TicketType);
 
         for (const item of pd.items) {
           const variant = item.variantId
