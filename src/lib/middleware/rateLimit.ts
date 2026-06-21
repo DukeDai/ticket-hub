@@ -127,9 +127,7 @@ export function checkViewThrottle(ip: string, productId: string): void {
   if (b.count > 10) {
     const retryAfter = Math.ceil((b.resetAt - now) / 1000);
     const err = new AppError('RATE_LIMITED', 'Too many requests', 429);
-    (err as Error & { headers?: HeadersInit }).headers = {
-      'Retry-After': String(retryAfter),
-    };
+    err.headers = { 'Retry-After': String(retryAfter) };
     throw err;
   }
 }
@@ -180,9 +178,7 @@ function checkInMemory(key: string, opts: RateLimitOpts): void {
   if (b.count > opts.max) {
     const retryAfter = Math.ceil((b.resetAt - now) / 1000);
     const err = new AppError('RATE_LIMITED', 'Too many requests', 429);
-    (err as Error & { headers?: HeadersInit }).headers = {
-      'Retry-After': String(retryAfter),
-    };
+    err.headers = { 'Retry-After': String(retryAfter) };
     throw err;
   }
 }

@@ -190,7 +190,8 @@ export async function submitForReview(id: string, actor: string) {
     { new: true }
   );
   cacheDeletePrefix('products:list:');
-  return updated;
+  // updated is non-null here: we already threw NOT_FOUND above
+  return updated!;
 }
 
 /**
@@ -219,7 +220,7 @@ export async function approveProduct(id: string, actor: string) {
     { new: true }
   );
   cacheDeletePrefix('products:list:');
-  return updated;
+  return updated!;
 }
 
 /**
@@ -248,12 +249,12 @@ export async function rejectProduct(id: string, actor: string, reason: string) {
     { new: true }
   );
   cacheDeletePrefix('products:list:');
-  return updated;
+  return updated!;
 }
 
 export async function listProducts(query: ListProductQuery, merchantId?: string) {
   await connectDB();
-  const { page, pageSize, sort, q, categoryId, ticketType, city, status } = query;
+  const { page = 1, pageSize = 20, sort, q, categoryId, ticketType, city, status } = query;
   const extraFilter: Record<string, unknown> = { status: status ?? 'active' };
   if (categoryId) extraFilter.categoryId = new mongoose.Types.ObjectId(categoryId);
   if (ticketType) extraFilter.ticketType = ticketType;

@@ -113,7 +113,27 @@ export const CreateProductSchema = z.object({
   merchantId: objectId.optional(),
   status: z.enum(['draft', 'pending_review', 'active', 'offline']).default('draft'),
 });
-export type CreateProductInput = z.infer<typeof CreateProductSchema>;
+export type CreateProductInput = Omit<z.infer<typeof CreateProductSchema>, 'images' | 'skuVariants' | 'dailyInventory' | 'refundable' | 'instantConfirm' | 'status' | 'attributes'> & {
+  images?: string[];
+  skuVariants?: {
+    _id?: string;
+    name: string;
+    priceInCents: number;
+    originalPriceInCents?: number;
+    stock: number;
+    validFrom?: Date;
+    validTo?: Date;
+  }[];
+  dailyInventory?: {
+    date: string;
+    stock: number;
+    sold?: number;
+  }[];
+  refundable?: boolean;
+  instantConfirm?: boolean;
+  status?: 'draft' | 'pending_review' | 'active' | 'offline';
+  attributes?: Record<string, unknown>;
+};
 
 export const UpdateProductSchema = CreateProductSchema.partial();
 export type UpdateProductInput = z.infer<typeof UpdateProductSchema>;
@@ -124,7 +144,10 @@ export const ListProductQuery = PaginationQuery.extend({
   city: z.string().trim().max(40).optional(),
   status: z.enum(['draft', 'pending_review', 'active', 'offline']).optional(),
 });
-export type ListProductQuery = z.infer<typeof ListProductQuery>;
+export type ListProductQuery = Omit<z.infer<typeof ListProductQuery>, 'page' | 'pageSize'> & {
+  page?: number;
+  pageSize?: number;
+};
 
 // ----- Review -----
 export const ReviewActionSchema = z.object({

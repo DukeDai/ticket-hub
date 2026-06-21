@@ -32,110 +32,94 @@ describe('rateLimit', () => {
   });
 
   describe('basic counting', () => {
-    it('first request within window passes silently', () => {
+    it('first request within window passes silently', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 5 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      expect(() => check(req)).not.toThrow();
+      await expect(check(req)).resolves.toBeUndefined();
     });
 
-    it('Nth request at max boundary passes (count === max)', () => {
+    it('Nth request at max boundary passes (count === max)', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 3 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      check(req);
-      check(req);
-      expect(() => check(req)).not.toThrow();
+      await check(req);
+      await check(req);
+      await expect(check(req)).resolves.toBeUndefined();
     });
 
     it('exceeding max throws AppError RATE_LIMITED 429 with Retry-After header', async () => {
-      const { AppError: FreshAppError } = await import('../withError');
       const check = rateLimit({ windowMs: 60_000, max: 3 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      check(req);
-      check(req);
-      check(req);
-      let caught: unknown;
+      await check(req);
+      await check(req);
+      await check(req);
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 });
       try {
-        check(req);
+        await check(req);
       } catch (e) {
-        caught = e;
+        const err = e as { code: string; status: number; headers?: Record<string, string> };
+        expect(err.code).toBe('RATE_LIMITED');
+        expect(err.status).toBe(429);
+        expect(err.headers).toBeDefined();
+        expect(err.headers!['Retry-After']).toMatch(/^\d+$/);
       }
-      expect(caught).toBeInstanceOf(FreshAppError);
-      expect((caught as AppError).code).toBe('RATE_LIMITED');
-      expect((caught as AppError).status).toBe(429);
-      const headers = (caught as AppError & { headers?: Record<string, string> }).headers;
-      expect(headers).toBeDefined();
-      expect(headers!['Retry-After']).toMatch(/^\d+$/);
     });
 
-    it('max=0: first call passes (count=1, no throw), second call throws', () => {
-      // The current code increments-then-checks, so max=0 only fires on the 2nd call.
-      // The first call always sets count=1 and returns.
+    it('max=0: first call passes (count=1, no throw), second call throws', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 0 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      expect(() => check(req)).not.toThrow();
-      expect(() => check(req)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await expect(check(req)).resolves.toBeUndefined();
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
 
-    it('max=1 second call: count becomes 2 > 1 → throws', () => {
+    it('max=1 second call: count becomes 2 > 1 → throws', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      check(req);
-      expect(() => check(req)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await check(req);
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
   });
 
   describe('window expiry', () => {
-    it('bucket resets after windowMs expires', () => {
+    it('bucket resets after windowMs expires', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      check(req);
+      await check(req);
       vi.advanceTimersByTime(60_001);
-      expect(() => check(req)).not.toThrow();
+      await expect(check(req)).resolves.toBeUndefined();
     });
 
-    it('expired bucket (resetAt <= now) starts fresh count', () => {
+    it('expired bucket (resetAt <= now) starts fresh count', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      check(req);
+      await check(req);
       vi.advanceTimersByTime(60_001);
-      check(req);
+      await check(req);
       vi.advanceTimersByTime(60_001);
-      expect(() => check(req)).not.toThrow();
+      await expect(check(req)).resolves.toBeUndefined();
     });
 
-    it('Retry-After rounds up via Math.ceil (500ms left → 1)', () => {
-      const check = rateLimit({ windowMs: 1000, max: 1 });
+    it('Retry-After rounds up via Math.ceil (500ms left → 1)', async () => {
+      const check = rateLimit({ windowMs: 1000, max: 0 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      check(req);
+      await check(req); // count=1
       vi.advanceTimersByTime(600);
-      let caught: unknown;
-      try {
-        check(req);
-      } catch (e) {
-        caught = e;
-      }
-      const headers = (caught as AppError & { headers?: Record<string, string> }).headers;
-      expect(headers!['Retry-After']).toBe('1');
+      // count=2 > max=0 → throw, Retry-After = ceil((T+1000-600)/1000) = ceil(0.4) = 1
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 });
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 });
     });
 
-    it('Retry-After: full window remaining returns exact seconds', () => {
-      const check = rateLimit({ windowMs: 1000, max: 1 });
+    it('Retry-After: full window remaining returns exact seconds', async () => {
+      const check = rateLimit({ windowMs: 1000, max: 0 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      check(req);
+      await check(req);
       vi.advanceTimersByTime(100);
-      let caught: unknown;
-      try {
-        check(req);
-      } catch (e) {
-        caught = e;
-      }
-      const headers = (caught as AppError & { headers?: Record<string, string> }).headers;
-      expect(headers!['Retry-After']).toBe('1');
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 });
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED', status: 429 });
     });
   });
 
   describe('keying', () => {
-    it('custom key function overrides IP+path default', () => {
+    it('custom key function overrides IP+path default', async () => {
       const check = rateLimit({
         windowMs: 60_000,
         max: 1,
@@ -143,104 +127,100 @@ describe('rateLimit', () => {
       });
       const reqA = makeReq({ url: 'http://localhost/api/x', cookies: { u: 'a' } });
       const reqB = makeReq({ url: 'http://localhost/api/x', cookies: { u: 'b' } });
-      check(reqA);
-      expect(() => check(reqB)).not.toThrow();
+      await check(reqA);
+      await expect(check(reqB)).resolves.toBeUndefined();
     });
 
-    it('different IPs get separate buckets (with TRUST_PROXY=1)', () => {
+    it('different IPs get separate buckets (with TRUST_PROXY=1)', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const reqA = makeReq({ url: 'http://localhost/api/x', headers: { 'x-forwarded-for': '1.1.1.1' } });
       const reqB = makeReq({ url: 'http://localhost/api/x', headers: { 'x-forwarded-for': '2.2.2.2' } });
-      check(reqA);
-      expect(() => check(reqB)).not.toThrow();
+      await check(reqA);
+      await expect(check(reqB)).resolves.toBeUndefined();
     });
 
-    it('different paths get separate buckets', () => {
+    it('different paths get separate buckets', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const reqA = makeReq({ url: 'http://localhost/api/a', ip: '1.1.1.1' });
       const reqB = makeReq({ url: 'http://localhost/api/b', ip: '1.1.1.1' });
-      check(reqA);
-      expect(() => check(reqB)).not.toThrow();
+      await check(reqA);
+      await expect(check(reqB)).resolves.toBeUndefined();
     });
   });
 
   describe('getClientIp (TRUST_PROXY)', () => {
-    it('TRUST_PROXY=0 ignores XFF (spoof protection)', () => {
+    it('TRUST_PROXY=0 ignores XFF (spoof protection)', async () => {
       vi.stubEnv('TRUST_PROXY', '');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', headers: { 'x-forwarded-for': '1.2.3.4' } });
-      check(req);
-      expect(() => check(req)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await check(req);
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
 
-    it('TRUST_PROXY=1 with XFF: takes first token trimmed', () => {
+    it('TRUST_PROXY=1 with XFF: takes first token trimmed', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const reqA = makeReq({ url: 'http://localhost/api/x', headers: { 'x-forwarded-for': '203.0.113.5, 10.0.0.1, 10.0.0.2' } });
       const reqB = makeReq({ url: 'http://localhost/api/x', headers: { 'x-forwarded-for': '198.51.100.1' } });
-      check(reqA);
-      expect(() => check(reqB)).not.toThrow();
+      await check(reqA);
+      await expect(check(reqB)).resolves.toBeUndefined();
     });
 
-    it('TRUST_PROXY=1 with XFF leading empty token falls through to x-real-ip', () => {
+    it('TRUST_PROXY=1 with XFF leading empty token falls through to x-real-ip', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({
         url: 'http://localhost/api/x',
         headers: { 'x-forwarded-for': ',10.0.0.1', 'x-real-ip': '5.5.5.5' },
       });
-      check(req);
-      // Different x-real-ip → different bucket
+      await check(req);
       const req2 = makeReq({ url: 'http://localhost/api/x', headers: { 'x-real-ip': '6.6.6.6' } });
-      expect(() => check(req2)).not.toThrow();
+      await expect(check(req2)).resolves.toBeUndefined();
     });
 
-    it('TRUST_PROXY=1 with XFF only leading empty: returns unknown', () => {
+    it('TRUST_PROXY=1 with XFF only leading empty: returns unknown', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', headers: { 'x-forwarded-for': ',,foo' } });
-      check(req);
-      // No req.ip set, no x-real-ip → 'unknown'
+      await check(req);
       const req2 = makeReq({ url: 'http://localhost/api/x' });
-      expect(() => check(req2)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await expect(check(req2)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
 
-    it('TRUST_PROXY=1 with only x-real-ip returns trimmed value', () => {
+    it('TRUST_PROXY=1 with only x-real-ip returns trimmed value', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const reqA = makeReq({ url: 'http://localhost/api/x', headers: { 'x-real-ip': '  5.5.5.5  ' } });
       const reqB = makeReq({ url: 'http://localhost/api/x', headers: { 'x-real-ip': '  6.6.6.6  ' } });
-      check(reqA);
-      expect(() => check(reqB)).not.toThrow();
+      await check(reqA);
+      await expect(check(reqB)).resolves.toBeUndefined();
     });
 
-    it('TRUST_PROXY=1, no headers, req.ip set returns req.ip', () => {
+    it('TRUST_PROXY=1, no headers, req.ip set returns req.ip', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const reqA = makeReq({ url: 'http://localhost/api/x', ip: '7.7.7.7' });
       const reqB = makeReq({ url: 'http://localhost/api/x', ip: '8.8.8.8' });
-      check(reqA);
-      expect(() => check(reqB)).not.toThrow();
+      await check(reqA);
+      await expect(check(reqB)).resolves.toBeUndefined();
     });
 
-    it('TRUST_PROXY=1, no headers, no req.ip returns "unknown"', () => {
+    it('TRUST_PROXY=1, no headers, no req.ip returns "unknown"', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const reqA = makeReq({ url: 'http://localhost/api/x' });
       const reqB = makeReq({ url: 'http://localhost/api/x' });
-      check(reqA);
-      expect(() => check(reqB)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await check(reqA);
+      await expect(check(reqB)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
 
-    it("TRUST_PROXY='true' string is NOT accepted (strict equality)", () => {
+    it("TRUST_PROXY='true' string is NOT accepted (strict equality)", async () => {
       vi.stubEnv('TRUST_PROXY', 'true');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', headers: { 'x-forwarded-for': '1.2.3.4' } });
-      check(req);
-      // TRUST_PROXY != '1' → XFF ignored → uses req.ip (none) → 'unknown'
-      // Same request → same bucket → second call throws
-      expect(() => check(req)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await check(req);
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
   });
 
@@ -249,110 +229,99 @@ describe('rateLimit', () => {
     // 所有匿名客户端共享同一桶 → 单点 DoS 放大器。
     // C14 改为 path + UA 前缀分桶：相同 path+UA 仍共享，不同 path/UA 不冲突。
 
-    it('unknown IP + same path + same UA collides (single bucket)', () => {
+    it('unknown IP + same path + same UA collides (single bucket)', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const reqA = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': 'curl/8.0' } });
       const reqB = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': 'curl/8.0' } });
-      check(reqA);
-      expect(() => check(reqB)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await check(reqA);
+      await expect(check(reqB)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
 
-    it('unknown IP + different paths do NOT collide', () => {
+    it('unknown IP + different paths do NOT collide', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const reqA = makeReq({ url: 'http://localhost/api/a', headers: { 'user-agent': 'curl/8.0' } });
       const reqB = makeReq({ url: 'http://localhost/api/b', headers: { 'user-agent': 'curl/8.0' } });
-      check(reqA);
-      expect(() => check(reqB)).not.toThrow();
+      await check(reqA);
+      await expect(check(reqB)).resolves.toBeUndefined();
     });
 
-    it('unknown IP + same path + different UAs do NOT collide', () => {
+    it('unknown IP + same path + different UAs do NOT collide', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const reqA = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': 'curl/8.0' } });
       const reqB = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': 'Mozilla/5.0' } });
-      check(reqA);
-      expect(() => check(reqB)).not.toThrow();
+      await check(reqA);
+      await expect(check(reqB)).resolves.toBeUndefined();
     });
 
-    it('unknown IP + no UA falls into no-ua bucket (shared with other no-UA requests)', () => {
+    it('unknown IP + no UA falls into no-ua bucket (shared with other no-UA requests)', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const reqA = makeReq({ url: 'http://localhost/api/x' });
       const reqB = makeReq({ url: 'http://localhost/api/x' });
-      check(reqA);
-      expect(() => check(reqB)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await check(reqA);
+      await expect(check(reqB)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
 
-    it('UA prefix is truncated to 32 chars (long UAs still collid with short prefix match)', () => {
+    it('UA prefix is truncated to 32 chars (long UAs still collid with short prefix match)', async () => {
       vi.stubEnv('TRUST_PROXY', '1');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const longUa = 'A'.repeat(100);
       const reqA = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': longUa } });
       const reqB = makeReq({ url: 'http://localhost/api/x', headers: { 'user-agent': longUa + 'EXTRA' } });
-      check(reqA);
+      await check(reqA);
       // Same first 32 chars → same bucket → collision
-      expect(() => check(reqB)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await expect(check(reqB)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
   });
 
   describe('HMR guard (C14 HMR hardening)', () => {
     it('bucket Map persists across vi.resetModules via globalThis', async () => {
-      // Pre-populate a bucket via the first module instance.
       const check1 = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      check1(req);
+      await check1(req);
 
-      // Reset modules — second import should pick up the same globalThis map.
       vi.resetModules();
       const mod = await import('../rateLimit');
       const check2 = mod.rateLimit({ windowMs: 60_000, max: 1 });
 
-      // Same IP/path → same bucket → should throw (state survived reload).
-      expect(() => check2(req)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await expect(check2(req)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
 
-    it('globalThis bucket cleared in beforeEach gives fresh state per test', () => {
-      // This test relies on the beforeEach clear — if it weren't cleared,
-      // a prior test's bucket would leak. We just verify isolation here.
+    it('globalThis bucket cleared in beforeEach gives fresh state per test', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '5.5.5.5' });
-      check(req);
-      // Second call → throws (fresh bucket with count=1 from above).
-      expect(() => check(req)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      await check(req);
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
   });
 
   describe('cleanup interval', () => {
-    it('module loads without error in Node test env', () => {
+    it('module loads without error in Node test env', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '9.9.9.9' });
-      check(req);
+      await check(req);
       expect(true).toBe(true);
     });
 
-    it('deletes expired buckets on sweep', () => {
+    it('deletes expired buckets on sweep', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '9.9.9.9' });
-      check(req);
+      await check(req);
       vi.advanceTimersByTime(120_000);
       vi.runOnlyPendingTimers();
-      expect(() => check(req)).not.toThrow();
+      await expect(check(req)).resolves.toBeUndefined();
     });
 
-    it('does NOT delete active buckets (resetAt > now)', () => {
+    it('does NOT delete active buckets (resetAt > now)', async () => {
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '9.9.9.9' });
-      check(req);
-      // Advance only 30s — bucket's resetAt is at +60s, so it's still active.
-      // Skip runOnlyPendingTimers (it would fire the cleanup interval from
-      // a *previous* test's module, but each beforeEach does a fresh
-      // resetModules + import. Just advance time and verify behavior.)
+      await check(req);
       vi.advanceTimersByTime(30_000);
-      // No cleanup interval should have fired (it runs at 60s).
-      // Second call: count goes 1→2, 2>1 → throws.
-      expect(() => check(req)).toThrowError(expect.objectContaining({ code: 'RATE_LIMITED' }));
+      // Bucket still active, count=2 > max=1 → throw
+      await expect(check(req)).rejects.toMatchObject({ code: 'RATE_LIMITED' });
     });
 
     it('unref called so it does not block process exit', async () => {
@@ -379,10 +348,10 @@ describe('rateLimit', () => {
       const { AppError } = await import('../withError');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      check(req);
+      await check(req);
       let caught: unknown;
       try {
-        check(req);
+        await check(req);
       } catch (e) {
         caught = e;
       }
@@ -390,19 +359,19 @@ describe('rateLimit', () => {
       const err = caught as AppError;
       expect(err.code).toBe('RATE_LIMITED');
       expect(err.status).toBe(429);
-      const headers = (err as Error & { headers?: Record<string, string> }).headers;
+      const headers = err.headers;
       expect(headers).toBeDefined();
-      expect(headers!['Retry-After']).toBeDefined();
+      expect((headers as Record<string, string>)['Retry-After']).toBeDefined();
     });
 
     it('throw carries .headers record that errorResponse merges', async () => {
       const { errorResponse } = await import('../withError');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const req = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });
-      check(req);
+      await check(req);
       let caught: unknown;
       try {
-        check(req);
+        await check(req);
       } catch (e) {
         caught = e;
       }
@@ -416,7 +385,7 @@ describe('rateLimit', () => {
       const { withError } = await import('../withError');
       const check = rateLimit({ windowMs: 60_000, max: 1 });
       const handler = withError(async (req: any) => {
-        check(req);
+        await check(req);
         return new Response('ok');
       });
       const req1 = makeReq({ url: 'http://localhost/api/x', ip: '1.1.1.1' });

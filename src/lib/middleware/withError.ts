@@ -17,6 +17,8 @@ export class AppError extends Error {
   status: number;
   code: string;
   details?: unknown;
+  /** Rate-limit middleware injects Retry-After here before throwing. */
+  headers?: HeadersInit;
 
   constructor(code: string, message: string, status = 400, details?: unknown) {
     super(message);
