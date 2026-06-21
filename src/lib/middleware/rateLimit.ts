@@ -3,6 +3,39 @@ import { createHash } from 'crypto';
 import { AppError } from './withError';
 import { getClientIp } from '@/lib/utils/clientIp';
 
+// ── Redis sliding window lazy loader ─────────────────────────────────────────
+
+interface SlidingWindowOpts {
+  windowMs: number;
+  max: number;
+  keyPrefix?: string;
+  byPath?: boolean;
+}
+
+//noinspection JSUnusedLocalSymbols
+let _slidingWindowCheck: ((key: string, opts: SlidingWindowOpts) => Promise<{
+  allowed: boolean;
+  remaining: number;
+  retryAfterMs: number | undefined;
+}>) | null = null;
+//noinspection JSUnusedLocalSymbols
+let _buildRateLimitKey: ((ip: string, path: string, opts: SlidingWindowOpts) => string) | null = null;
+let _redisLoaded = false;
+
+async function ensureRedisLoaded(): Promise<void> {
+  if (_redisLoaded || _slidingWindowCheck) return;
+  if (process.env.USE_REDIS_RATE_LIMIT !== '1') return;
+
+  try {
+    const m = await import('@/lib/rate-limit-redis');
+    _slidingWindowCheck = m.slidingWindowCheck;
+    _buildRateLimitKey = m.buildRateLimitKey;
+    _redisLoaded = true;
+  } catch {
+    // Redis 模块加载失败，保持 null，降级到内存版
+  }
+}
+
 /**
  * 简易内存版限流。
  *
@@ -39,23 +72,6 @@ function extractIp(req: NextRequest): string | null {
   return ip === 'unknown' ? null : ip;
 }
 
-/**
- * 构造限流桶 key。
- *
- * 已知 IP：`<ip>:<path>`（按调用方和路径隔离，标准做法）。
- * 未知 IP：`<path>:ua:<ua 前缀>` —— 仅在 IP 拿不到时启用，
- *   避免所有匿名请求坍缩到 'unknown' 单桶形成 DoS 放大器。
- *   UA 前缀 32 字符（截断长串/二进制噪音）；同一 UA 仍共享桶，但攻击者
- *   需要变换 UA 才能放大爆炸半径。
- */
-function buildBucketKey(req: NextRequest, ip: string | null): string {
-  // C28-06：NextRequest 已经把 URL 解析好挂在 `nextUrl`，直接读 pathname 比 `new URL(req.url)` 再构造解析省一次分配；
-  // 每个 mutating 请求都会走这里，热点路径上少一个 URL parser 调用。
-  const path = req.nextUrl.pathname;
-  if (ip) return `${ip}:${path}`;
-  const ua = req.headers.get('user-agent')?.slice(0, 32) ?? 'no-ua';
-  return `${path}:ua:${ua}`;
-}
 
 /**
  * 哈希一段敏感值（cookie、token 等）以构造限流 key（C20 #10）。
@@ -140,27 +156,85 @@ export interface RateLimitOpts {
   key?: (req: NextRequest) => string;
 }
 
+/**
+ * 格式：`<ip>:<path>` 或 `<path>:ua:<ua>`（无 IP 时）
+ */
+function buildBucketKey(req: NextRequest, ip: string | null): string {
+  const path = req.nextUrl.pathname;
+  if (ip) return `${ip}:${path}`;
+  const ua = req.headers.get('user-agent')?.slice(0, 32) ?? 'no-ua';
+  return `${path}:ua:${ua}`;
+}
+
+/**
+ * 同步内存版限流检查（throw on reject）。
+ */
+function checkInMemory(key: string, opts: RateLimitOpts): void {
+  const now = Date.now();
+  const b = buckets.get(key);
+  if (!b || b.resetAt <= now) {
+    buckets.set(key, { count: 1, resetAt: now + opts.windowMs });
+    return;
+  }
+  b.count += 1;
+  if (b.count > opts.max) {
+    const retryAfter = Math.ceil((b.resetAt - now) / 1000);
+    const err = new AppError('RATE_LIMITED', 'Too many requests', 429);
+    (err as Error & { headers?: HeadersInit }).headers = {
+      'Retry-After': String(retryAfter),
+    };
+    throw err;
+  }
+}
+
+/**
+ * 限流中间件。
+ *
+ * 优先使用 Redis 滑动窗口（USE_REDIS_RATE_LIMIT=1），否则降级到内存版。
+ * Redis 模式为异步（await），内存模式为同步（throw）。
+ *
+ * 注意：Redis 模式需要在路由层 await 此函数返回的 check。
+ */
 export function rateLimit(opts: RateLimitOpts) {
-  return function check(req: NextRequest): void {
-    const ip = extractIp(req);
-    const key =
-      opts.key?.(req) ?? buildBucketKey(req, ip);
-    const now = Date.now();
-    const b = buckets.get(key);
-    if (!b || b.resetAt <= now) {
-      buckets.set(key, { count: 1, resetAt: now + opts.windowMs });
+  const check = async function (req: NextRequest): Promise<void> {
+    await ensureRedisLoaded();
+    if (_slidingWindowCheck && _buildRateLimitKey) {
+      // Redis 滑动窗口模式
+      const ip = extractIp(req);
+      if (!ip) {
+        // 拿不到 IP 时降级到内存版兜底
+        checkInMemory(buildBucketKey(req, null), opts);
+        return;
+      }
+      const path = req.nextUrl.pathname;
+      const redisKey = _buildRateLimitKey(ip, path, {
+        windowMs: opts.windowMs,
+        max: opts.max,
+        byPath: true,
+      });
+      const result = await _slidingWindowCheck(redisKey, {
+        windowMs: opts.windowMs,
+        max: opts.max,
+      });
+      if (!result.allowed) {
+        const err = new AppError('RATE_LIMITED', 'Too many requests', 429);
+        const retryAfter = Math.ceil((result.retryAfterMs ?? opts.windowMs) / 1000);
+        (err as Error & { headers?: HeadersInit }).headers = {
+          'Retry-After': String(retryAfter),
+        };
+        throw err;
+      }
       return;
     }
-    b.count += 1;
-    if (b.count > opts.max) {
-      const retryAfter = Math.ceil((b.resetAt - now) / 1000);
-      const err = new AppError('RATE_LIMITED', 'Too many requests', 429);
-      (err as Error & { headers?: HeadersInit }).headers = {
-        'Retry-After': String(retryAfter),
-      };
-      throw err;
-    }
+
+    // 内存版兜底（同步 throw）
+    const ip = extractIp(req);
+    const key = opts.key?.(req) ?? buildBucketKey(req, ip);
+    checkInMemory(key, opts);
   };
+
+  // 标记 check 为异步函数以便 await
+  return check;
 }
 
 /**
