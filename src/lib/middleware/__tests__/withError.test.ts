@@ -32,7 +32,8 @@ describe('withError', () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const res = errorResponse(new AppError('MY_CUSTOM', 'hello', 400));
       expect(warn).toHaveBeenCalledOnce();
-      expect(warn.mock.calls[0]![0]).toContain('MY_CUSTOM');
+      // logger.warn -> console.warn('[LOGGER]', `unmapped AppError code: ${code}`)
+      expect(warn.mock.calls[0]![1]).toContain('MY_CUSTOM');
       const body = await res.json();
       expect(body.error.code).toBe('MY_CUSTOM');
       expect(body.error.message).toBe('hello');

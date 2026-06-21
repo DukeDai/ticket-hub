@@ -448,9 +448,14 @@ export async function cancelOrder(orderId: string, actor: OrderActor) {
     return claimed.toObject();
   }
 
-  // CAS 失败：用一次 fallback 读确定当前状态
+  // CAS 失败：用一次 fallback 读确定当前状态。
   // C30 perf: 只读 userId + status，投影减少 wire。
-  const current = await Order.findById(orderId).select('userId status').lean();
+  // C32 fix: 把 userId 也放进 filter，防止非特权用户 pre-read 他人订单（IDOR pre-read 漏洞）。
+  const currentFilter: Record<string, unknown> = { _id: orderId };
+  if (!isPrivileged) {
+    currentFilter.userId = new mongoose.Types.ObjectId(actor.userId);
+  }
+  const current = await Order.findOne(currentFilter).select('userId status').lean();
   if (!current) throw new AppError('NOT_FOUND', 'Order not found', 404);
   // 非特权用户：filter 不匹配有两种原因——userId 不对 或 status 已变。
   // 这里 current.userId 不对 → 是 owner mismatch 而非 status 问题（filter 已保证 status 不可能仍为 pending）

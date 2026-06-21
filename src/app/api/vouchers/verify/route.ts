@@ -57,30 +57,25 @@ const validated = withValidation({ body: Schema }, async ({ body, req }) => {
   const usedBy = user.name;
 
   await connectDB();
-  const voucher = await Voucher.findOne({ code: body.code });
-  if (!voucher) throw new AppError('NOT_FOUND', 'Voucher not found', 404);
-  if (voucher.status !== 'active') {
-    // C25-04 (yellow): 静态文案替代动态 status interpolation，避免 enumeration。
-    // 原 throw \`Voucher is ${voucher.status}\` 把 voucher.status 拼到错误消息
-    // → 已知 code 的 attacker 可探测 voucher 真实状态（used / cancelled /
-    //   refunded 各返回不同消息），是 voucher 状态侧信道。
-    // 修法：所有非 active 状态走同一静态文案。
-    // 注意：EXPIRED（line 67 单独抛）仍然区分"已过期"——因为过期是带时间
-    // 维度的状态，不属于"已知 code 探测"威胁面。
-    throw new AppError('INVALID_STATUS', 'Voucher is no longer valid', 422);
-  }
-  if (voucher.expiresAt && voucher.expiresAt.getTime() < Date.now()) {
-    voucher.status = 'expired';
-    await voucher.save();
-    throw new AppError('EXPIRED', 'Voucher has expired', 422);
-  }
-  // 原子核销：避免两个核销员同时成功扣同一张券
+
+  // C30: 合并为单次 findOneAndUpdate —— 同时用 code+status 做守卫条件。
+  // 原两步：findOne({ code }) → 检查 status/expires → findOneAndUpdate({ _id, status })
+  // 合并后一步：findOneAndUpdate({ code, status:'active', expiresAt:{$gt:now} })
+  // 即完成存在性 + status 守卫 + 原子核销。
   const updated = await Voucher.findOneAndUpdate(
-    { _id: voucher._id, status: 'active' },
+    { code: body.code, status: 'active', expiresAt: { $gt: new Date() } },
     { $set: { status: 'used', usedAt: new Date(), usedBy } },
     { new: true }
   );
-  if (!updated) throw new AppError('RACE_CONDITION', 'Voucher was just redeemed', 409);
+
+  if (!updated) {
+    // C30: 用 exists() 判断是"不存在"还是"状态不对"——避免二次完整查询
+    const exists = await Voucher.exists({ code: body.code });
+    if (!exists) throw new AppError('NOT_FOUND', 'Voucher not found', 404);
+    // 走到这里说明 code 存在但不在 active 状态（含已 used/cancelled/refunded/expired）
+    throw new AppError('INVALID_STATUS', 'Voucher is no longer valid', 422);
+  }
+
   return Response.json({ voucher: updated });
 });
 
