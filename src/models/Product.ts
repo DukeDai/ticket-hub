@@ -17,7 +17,7 @@ import type { TicketType } from './Category';
  * 价格字段：priceInCents 用整数分存储，避免浮点精度问题。
  */
 
-export type ProductStatus = 'draft' | 'active' | 'offline';
+export type ProductStatus = 'draft' | 'pending_review' | 'active' | 'offline';
 
 export interface SkuVariant {
   _id?: mongoose.Types.ObjectId;
@@ -94,6 +94,12 @@ export interface IProduct {
   merchantId?: mongoose.Types.ObjectId | null;
   updatedBy?: mongoose.Types.ObjectId;
 
+  /** 内容审核字段 */
+  submittedAt?: Date;
+  reviewedBy?: mongoose.Types.ObjectId;
+  reviewedAt?: Date;
+  rejectionNote?: string;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -165,7 +171,7 @@ const productSchema = new Schema<IProduct>(
 
     status: {
       type: String,
-      enum: ['draft', 'active', 'offline'],
+      enum: ['draft', 'pending_review', 'active', 'offline'],
       default: 'draft',
       index: true,
     },

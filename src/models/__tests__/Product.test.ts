@@ -54,8 +54,8 @@ describe('Product schema', () => {
   });
 
   describe('enum: status', () => {
-    it('has draft / active / offline', () => {
-      expect(enumValues('status').sort()).toEqual(['active', 'draft', 'offline'].sort());
+    it('has draft / pending_review / active / offline', () => {
+      expect(enumValues('status').sort()).toEqual(['active', 'draft', 'offline', 'pending_review'].sort());
     });
 
     it('defaults to "draft"', () => {

@@ -28,7 +28,7 @@ interface InitialValues {
   address: string;
   refundable: boolean;
   instantConfirm: boolean;
-  status: 'draft' | 'active' | 'offline';
+  status: 'draft' | 'pending_review' | 'active' | 'offline';
 }
 
 export function ProductForm({
@@ -252,6 +252,7 @@ export function ProductForm({
           onChange={(e) => update('status', e.target.value as InitialValues['status'])}
         >
           <option value="draft">草稿</option>
+          <option value="pending_review">待审核</option>
           <option value="active">上架</option>
           <option value="offline">下架</option>
         </Select>

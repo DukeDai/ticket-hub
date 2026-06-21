@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { escapeRegex } from '@/lib/utils/regex';
 import { listActiveCategoriesForUI } from '@/lib/services/CategoryService';
 import { requireAdmin } from '@/lib/auth/guard';
+import { ReviewActions } from '@/components/cms/ReviewActions';
 
 export default async function CmsProductsPage({
   searchParams,
@@ -30,7 +31,7 @@ export default async function CmsProductsPage({
       .sort({ createdAt: -1 })
       .skip((page - 1) * pageSize)
       .limit(pageSize)
-      .select('title slug images priceInCents stock sold salesCount status ticketType categoryId')
+      .select('title slug images priceInCents stock sold salesCount status ticketType categoryId createdBy rejectionNote')
       .lean(),
     Product.countDocuments(filter),
     listActiveCategoriesForUI(),
@@ -67,6 +68,7 @@ export default async function CmsProductsPage({
           <option value="">全部状态</option>
           <option value="active">已上架</option>
           <option value="draft">草稿</option>
+          <option value="pending_review">待审核</option>
           <option value="offline">已下架</option>
         </select>
         <button
@@ -119,16 +121,23 @@ export default async function CmsProductsPage({
                           ? 'bg-green-100 text-green-700'
                           : p.status === 'draft'
                           ? 'bg-yellow-100 text-yellow-700'
+                          : p.status === 'pending_review'
+                          ? 'bg-blue-100 text-blue-700'
                           : 'bg-gray-100 text-gray-500'
                       }`}
                     >
-                      {p.status}
+                      {p.status === 'pending_review' ? '待审核' : p.status === 'draft' ? '草稿' : p.status === 'active' ? '已上架' : '已下架'}
                     </span>
+                    {p.rejectionNote && (
+                      <div className="mt-1 text-xs text-red-500" title={p.rejectionNote}>
+                        拒绝: {p.rejectionNote.slice(0, 20)}…
+                      </div>
+                    )}
                   </td>
-                  <td className="px-4 py-3 space-x-2">
+                  <td className="px-4 py-3 space-y-1">
                     <Link
                       href={`/cms/products/${String(p._id)}/edit`}
-                      className="text-brand-500 hover:underline"
+                      className="block text-brand-500 hover:underline"
                     >
                       编辑
                     </Link>
@@ -136,10 +145,17 @@ export default async function CmsProductsPage({
                       href={`/products/${p.slug}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-gray-500 hover:underline"
+                      className="block text-gray-500 hover:underline"
                     >
                       预览
                     </a>
+                    <ReviewActions
+                      productId={String(p._id)}
+                      status={p.status}
+                      userRole={user.role as 'user' | 'staff' | 'admin'}
+                      createdById={p.createdBy != null ? String(p.createdBy) : undefined}
+                      currentUserId={user.sub}
+                    />
                   </td>
                 </tr>
               );

@@ -111,7 +111,7 @@ export const CreateProductSchema = z.object({
   attributes: z.record(z.string(), z.unknown()).default({}),
   /** 商户 ID：staff 用户创建商品时必填；admin 可不填（不限制） */
   merchantId: objectId.optional(),
-  status: z.enum(['draft', 'active', 'offline']).default('draft'),
+  status: z.enum(['draft', 'pending_review', 'active', 'offline']).default('draft'),
 });
 export type CreateProductInput = z.infer<typeof CreateProductSchema>;
 
@@ -122,9 +122,16 @@ export const ListProductQuery = PaginationQuery.extend({
   categoryId: objectId.optional(),
   ticketType: TicketType.optional(),
   city: z.string().trim().max(40).optional(),
-  status: z.enum(['draft', 'active', 'offline']).optional(),
+  status: z.enum(['draft', 'pending_review', 'active', 'offline']).optional(),
 });
 export type ListProductQuery = z.infer<typeof ListProductQuery>;
+
+// ----- Review -----
+export const ReviewActionSchema = z.object({
+  action: z.enum(['submit', 'approve', 'reject']),
+  reason: z.string().trim().max(500).optional(),
+});
+export type ReviewActionInput = z.infer<typeof ReviewActionSchema>;
 
 // ----- Category -----
 export const CreateCategorySchema = z.object({

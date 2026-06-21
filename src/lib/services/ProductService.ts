@@ -166,6 +166,91 @@ export async function offlineProduct(id: string, updatedBy: string) {
   return updated;
 }
 
+/**
+ * 内容审核工作流：提交审核
+ * draft → pending_review
+ */
+export async function submitForReview(id: string, actor: string) {
+  await connectDB();
+  if (!mongoose.isValidObjectId(id)) {
+    throw new AppError('INVALID_ID', 'Invalid product id', 400);
+  }
+  const product = await Product.findById(id);
+  if (!product) throw new AppError('NOT_FOUND', 'Product not found', 404);
+  if (product.status !== 'draft') {
+    throw new AppError('INVALID_STATUS', 'Only draft products can be submitted for review', 422);
+  }
+  const updated = await Product.findByIdAndUpdate(
+    id,
+    {
+      status: 'pending_review',
+      submittedAt: new Date(),
+      updatedBy: new mongoose.Types.ObjectId(actor),
+    },
+    { new: true }
+  );
+  cacheDeletePrefix('products:list:');
+  return updated;
+}
+
+/**
+ * 内容审核工作流：批准
+ * pending_review → active
+ */
+export async function approveProduct(id: string, actor: string) {
+  await connectDB();
+  if (!mongoose.isValidObjectId(id)) {
+    throw new AppError('INVALID_ID', 'Invalid product id', 400);
+  }
+  const product = await Product.findById(id);
+  if (!product) throw new AppError('NOT_FOUND', 'Product not found', 404);
+  if (product.status !== 'pending_review') {
+    throw new AppError('INVALID_STATUS', 'Only pending_review products can be approved', 422);
+  }
+  const updated = await Product.findByIdAndUpdate(
+    id,
+    {
+      status: 'active',
+      reviewedBy: new mongoose.Types.ObjectId(actor),
+      reviewedAt: new Date(),
+      rejectionNote: undefined,
+      updatedBy: new mongoose.Types.ObjectId(actor),
+    },
+    { new: true }
+  );
+  cacheDeletePrefix('products:list:');
+  return updated;
+}
+
+/**
+ * 内容审核工作流：拒绝
+ * pending_review → draft（附拒绝原因）
+ */
+export async function rejectProduct(id: string, actor: string, reason: string) {
+  await connectDB();
+  if (!mongoose.isValidObjectId(id)) {
+    throw new AppError('INVALID_ID', 'Invalid product id', 400);
+  }
+  const product = await Product.findById(id);
+  if (!product) throw new AppError('NOT_FOUND', 'Product not found', 404);
+  if (product.status !== 'pending_review') {
+    throw new AppError('INVALID_STATUS', 'Only pending_review products can be rejected', 422);
+  }
+  const updated = await Product.findByIdAndUpdate(
+    id,
+    {
+      status: 'draft',
+      reviewedBy: new mongoose.Types.ObjectId(actor),
+      reviewedAt: new Date(),
+      rejectionNote: reason,
+      updatedBy: new mongoose.Types.ObjectId(actor),
+    },
+    { new: true }
+  );
+  cacheDeletePrefix('products:list:');
+  return updated;
+}
+
 export async function listProducts(query: ListProductQuery, merchantId?: string) {
   await connectDB();
   const { page, pageSize, sort, q, categoryId, ticketType, city, status } = query;
