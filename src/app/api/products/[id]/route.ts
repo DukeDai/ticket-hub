@@ -6,6 +6,7 @@ import { AppError } from '@/lib/middleware/withError';
 import { UpdateProductSchema } from '@/lib/validation/schemas';
 import { updateProduct, offlineProduct, getProductById } from '@/lib/services/ProductService';
 import { getClientIp } from '@/lib/utils/clientIp';
+import { checkViewThrottle } from '@/lib/middleware/rateLimit';
 import mongoose from 'mongoose';
 
 /**
@@ -47,8 +48,10 @@ export const GET = withAuth<[Ctx]>(async (req, user, ctx) => {
   if (!mongoose.isValidObjectId(id)) {
     throw new AppError('INVALID_ID', 'Invalid product id', 400);
   }
-  await connectDB();
+  // C33-01：per-IP + per-product 60s window throttle（max 10 views）。
   const ip = getClientIp(req);
+  checkViewThrottle(ip, id);
+  await connectDB();
   const product = await getProductById(id, {
     ip,
     select:

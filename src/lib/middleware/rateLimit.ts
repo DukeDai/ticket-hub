@@ -71,6 +71,66 @@ export function hashKeyPart(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 16);
 }
 
+// C33-01：新增 viewCount throttle（per-IP + per-product，60s window，max 10 views）。
+// 用于 product detail 页面的爬虫/恶意刷页面浏览量防护。
+
+interface ViewBucket {
+  count: number;
+  resetAt: number;
+}
+
+const gView = globalThis as unknown as { __viewThrottleBuckets?: Map<string, ViewBucket> };
+const viewBuckets: Map<string, ViewBucket> =
+  gView.__viewThrottleBuckets ?? (gView.__viewThrottleBuckets = new Map());
+
+/**
+ * 构造 view throttle bucket key。
+ * 格式：`<ip>:<productId>`
+ */
+export function buildViewThrottleKey(ip: string, productId: string): string {
+  return `${ip}:${productId}`;
+}
+
+/**
+ * 检查同一 IP 是否在 60s 内超过了对同一商品的 10 次页面浏览。
+ * 超过则 throw AppError 429。
+ *
+ * @param ip   客户端 IP（由调用方从 getClientIp 取得）
+ * @param productId  商品 id
+ */
+export function checkViewThrottle(ip: string, productId: string): void {
+  if (ip === 'unknown') return; // 拿不到 IP 时跳过 throttle（兜底放行）
+  const key = buildViewThrottleKey(ip, productId);
+  const now = Date.now();
+  const b = viewBuckets.get(key);
+  if (!b || b.resetAt <= now) {
+    viewBuckets.set(key, { count: 1, resetAt: now + 60_000 });
+    return;
+  }
+  b.count += 1;
+  if (b.count > 10) {
+    const retryAfter = Math.ceil((b.resetAt - now) / 1000);
+    const err = new AppError('RATE_LIMITED', 'Too many requests', 429);
+    (err as Error & { headers?: HeadersInit }).headers = {
+      'Retry-After': String(retryAfter),
+    };
+    throw err;
+  }
+}
+
+// Sweep stale view buckets every 60s (mirrors existing bucket sweeper pattern).
+const viewSweepG = globalThis as unknown as { __viewThrottleSweeper?: { unref?: () => void } };
+if (!viewSweepG.__viewThrottleSweeper && typeof setInterval !== 'undefined') {
+  const handle = setInterval(() => {
+    const now = Date.now();
+    for (const [k, b] of viewBuckets) {
+      if (b.resetAt <= now) viewBuckets.delete(k);
+    }
+  }, 60_000);
+  handle.unref?.();
+  viewSweepG.__viewThrottleSweeper = handle as { unref?: () => void };
+}
+
 export interface RateLimitOpts {
   /** 时间窗口 ms */
   windowMs: number;
