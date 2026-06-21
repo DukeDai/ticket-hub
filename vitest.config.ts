@@ -9,12 +9,15 @@ import path from 'node:path';
  *  - Component tests can switch per file with a happy-dom env comment.
  *  - The alias mirrors tsconfig.json paths so source imports resolve in tests.
  *  - Coverage excludes barrelled index files and test files themselves.
- *  - setupFiles is empty for v0. Add MSW or mongodb-memory-server here later.
+ *  - setupFiles sets MONGODB_URI placeholder so db.ts does not throw at module eval time;
+ *    real URI (in-memory server) injected by setupTestDB() in each test file.
  */
 export default defineConfig({
   test: {
     environment: 'node',
     globals: false,
+    setupFiles: ['./test-setup.ts'],
+    hookTimeout: 300000,
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'src/**/*.spec.ts', 'src/**/*.spec.tsx'],
     exclude: ['node_modules', '.next', 'dist'],
     coverage: {
@@ -36,6 +39,7 @@ export default defineConfig({
         '**/*.spec.ts',
         '**/*.spec.tsx',
         '**/index.ts',
+        'src/__tests__/**',
       ],
     },
   },

@@ -13,7 +13,7 @@
  */
 
 export const ORDER_PRODUCT_PROJECTION =
-  'title status images ticketType location skuVariants dailyInventory attributes validDaysAfterPurchase validTo';
+  'title status images ticketType location priceInCents skuVariants dailyInventory attributes validDaysAfterPurchase validTo';
 
 export const CART_PRODUCT_PROJECTION =
   'title slug images priceInCents originalPriceInCents status stock sold dailyInventory skuVariants ticketType';
